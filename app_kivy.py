@@ -20,9 +20,58 @@ from kivy.core.window import Window
 from config import CURRENT_CONFIG
 from engines.chatbot_engine import ChatbotEngine
 from engines.threed_engine import ThreeDEngine
+from android_media import AndroidMediaBridge
 
 # Set Window dark background
 Window.clearcolor = (0, 0, 0, 1)
+
+
+
+from threading import Thread
+from kivy.clock import Clock
+from kivy.metrics import dp
+from kivy.uix.widget import Widget
+from kivy.graphics import RoundedRectangle
+
+
+class ChatBubble(BoxLayout):
+    def __init__(self, message, sender="Laiba", **kwargs):
+        super().__init__(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=(dp(13), dp(9)),
+            spacing=dp(4),
+            **kwargs
+        )
+        self.size_hint_x = 0.86
+        self.bind(minimum_height=self.setter("height"))
+
+        is_user = sender == "You"
+        bg = (0.0, 0.38, 0.42, 1) if is_user else (0.075, 0.12, 0.20, 1)
+        fg = (0.75, 1, 1, 1) if is_user else (0.94, 0.97, 1, 1)
+
+        with self.canvas.before:
+            Color(*bg)
+            self.panel = RoundedRectangle(
+                pos=self.pos, size=self.size, radius=[dp(15)]
+            )
+        self.bind(pos=self._update_panel, size=self._update_panel)
+
+        label = Label(
+            text=message,
+            color=fg,
+            halign="left",
+            valign="middle",
+            font_size="15sp",
+            size_hint_y=None,
+            text_size=(Window.width * 0.70, None)
+        )
+        label.bind(texture_size=lambda obj, size: setattr(obj, "height", size[1] + dp(8)))
+        self.add_widget(label)
+
+    def _update_panel(self, *args):
+        self.panel.pos = self.pos
+        self.panel.size = self.size
 
 
 class ThreeDCanvasWidget(BoxLayout):
@@ -34,266 +83,399 @@ class ThreeDCanvasWidget(BoxLayout):
     def update_canvas(self, *args):
         self.canvas.before.clear()
         with self.canvas.before:
-            Color(0.03, 0.03, 0.03, 1)
+            Color(0.025, 0.045, 0.075, 1)
             Rectangle(pos=self.pos, size=self.size)
-            Color(0, 1, 0.8, 1)
+            Color(0, 0.85, 1, 1)
             Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
 
-        # Draw the engine's rotated 3D projection in widget-local coordinates.
         self.canvas.clear()
         with self.canvas:
-            Color(0, 1, 0.8, 0.9)
+            Color(0, 0.9, 1, 0.9)
             scale = min(self.width, self.height) * 0.65
             segments = self.threed_engine.get_projected_wireframe(
-                scale=scale, center_x=self.width / 2, center_y=self.height / 2
+                scale=scale,
+                center_x=self.width / 2,
+                center_y=self.height / 2
             )
             for start, end in segments:
-                Line(points=[self.x + start[0], self.y + start[1],
-                             self.x + end[0], self.y + end[1]], width=1.5)
+                Line(
+                    points=[
+                        self.x + start[0], self.y + start[1],
+                        self.x + end[0], self.y + end[1]
+                    ],
+                    width=1.5
+                )
 
 
 class LaibaKivyApp(App):
     def build(self):
-        # Store API settings inside Android app-private storage.
         app_config.CONFIG_FILE = os.path.join(
             self.user_data_dir, "laiba_config.json"
+        )
+        self.history_file = os.path.join(
+            self.user_data_dir, "laiba_chat_history.json"
         )
 
         saved_config = app_config.load_config()
         CURRENT_CONFIG.clear()
         CURRENT_CONFIG.update(saved_config)
 
-        # Migrate retired Gemini model to the current stable model.
-        if CURRENT_CONFIG.get("GEMINI_MODEL") not in ("gemini-3.8-flash", "gemini-3.5-flash"):
-            CURRENT_CONFIG["GEMINI_MODEL"] = "gemini-3.8-flash"
-
-        self.title = "Google Gemini AI Setup"
+        self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
         self.chatbot = ChatbotEngine()
+        self.media_bridge = AndroidMediaBridge(self)
         self.threed_engine = ThreeDEngine()
+        self.chat_history = self.load_history()
 
         if self.chatbot.api_key:
-            self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
             return self.build_main_screen()
+        return self.build_setup_screen()
 
+    def load_history(self):
+        try:
+            import json
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def save_history(self):
+        import json
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(self.chat_history[-150:], f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            print("[LAIBA] Chat history save error:", exc)
+
+    def build_setup_screen(self):
         root = BoxLayout(
             orientation="vertical",
-            padding=24,
-            spacing=16
+            padding=dp(24),
+            spacing=dp(16)
+        )
+        root.canvas.before.clear()
+        with root.canvas.before:
+            Color(0.015, 0.025, 0.055, 1)
+            root_bg = Rectangle(pos=root.pos, size=root.size)
+        root.bind(
+            pos=lambda obj, val: setattr(root_bg, "pos", val),
+            size=lambda obj, val: setattr(root_bg, "size", val)
         )
 
         root.add_widget(Label(
-            text="[b]CONNECT GOOGLE GEMINI AI[/b]",
+            text="[b]⚡ LAIBA AI[/b]",
             markup=True,
-            font_size="23sp",
-            color=(0, 1, 0.8, 1),
+            font_size="28sp",
+            color=(0, 0.9, 1, 1),
             size_hint_y=None,
-            height=80
+            height=dp(85)
         ))
-
         root.add_widget(Label(
-            text="Enter your Google Gemini AI API Key to activate Laiba.",
+            text="Connect your Gemini AI brain",
             font_size="16sp",
-            color=(1, 1, 1, 1),
-            halign="center",
+            color=(0.8, 0.9, 1, 1),
             size_hint_y=None,
-            height=65
+            height=dp(45)
         ))
 
         self.api_key_input = TextInput(
-            hint_text="Paste your Google Gemini AI API Key",
+            hint_text="Paste Gemini API Key",
             password=True,
             multiline=False,
             size_hint_y=None,
-            height=55,
-            background_color=(0.08, 0.08, 0.08, 1),
+            height=dp(54),
+            background_color=(0.06, 0.09, 0.15, 1),
             foreground_color=(1, 1, 1, 1),
-            cursor_color=(0, 1, 0.8, 1)
+            cursor_color=(0, 0.9, 1, 1)
         )
-        self.api_key_input.bind(
-            on_text_validate=self.verify_api_key
-        )
+        self.api_key_input.bind(on_text_validate=self.verify_api_key)
         root.add_widget(self.api_key_input)
 
         self.verify_button = Button(
-            text="VERIFY CONNECTION",
+            text="CONNECT GEMINI",
             size_hint_y=None,
-            height=55,
-            background_color=(0, 0.65, 0.48, 1),
+            height=dp(54),
+            background_normal="",
+            background_color=(0, 0.65, 0.75, 1),
             color=(1, 1, 1, 1)
         )
-        self.verify_button.bind(
-            on_release=self.verify_api_key
-        )
+        self.verify_button.bind(on_release=self.verify_api_key)
         root.add_widget(self.verify_button)
 
         self.setup_status = Label(
-            text="Create your API key in Google AI Studio, then paste it here.",
-            color=(0.7, 0.7, 0.7, 1),
+            text="Your API key stays in this app's private storage.",
+            color=(0.65, 0.8, 0.9, 1),
             halign="center"
         )
         root.add_widget(self.setup_status)
-
         return root
 
     def verify_api_key(self, instance):
-        from threading import Thread
-        from kivy.clock import Clock
-
         key = self.api_key_input.text.strip()
-
         if not key:
-            self.setup_status.text = "Please enter your Google Gemini AI API Key."
+            self.setup_status.text = "Please enter your Gemini API key."
             return
 
         self.verify_button.disabled = True
-        self.setup_status.text = "Verifying your Google Gemini AI connection..."
+        self.setup_status.text = "Connecting to Gemini..."
 
         def worker():
             old_key = self.chatbot.api_key
-            self.chatbot.api_key = key
-
+            ok = False
+            message = "Connection failed."
             try:
+                self.chatbot.api_key = key
                 result = self.chatbot.test_api_connection()
                 ok = bool(result.get("ok"))
-                message = str(result.get("message", "Verification failed."))
-
+                message = str(result.get("message", message))
                 if ok:
                     save_result = self.chatbot.set_api_key(key)
                     if not save_result.lower().startswith("api key saved"):
                         ok = False
                         message = save_result
             except Exception as exc:
-                ok = False
                 message = str(exc)
             finally:
                 if not ok:
                     self.chatbot.api_key = old_key
-
-            message = message.replace(key, "[HIDDEN]")
+                message = message.replace(key, "[HIDDEN]")
             Clock.schedule_once(
-                lambda dt: self._finish_api_verification(ok, message), 0
+                lambda dt: self.finish_verification(ok, message), 0
             )
 
         Thread(target=worker, daemon=True).start()
 
-    def _finish_api_verification(self, ok, message):
+    def finish_verification(self, ok, message):
         if not ok:
             self.verify_button.disabled = False
-            self.setup_status.text = "Connection failed: " + str(message)
+            self.setup_status.text = "Connection failed: " + message
             return
-
-        try:
-            main_screen = self.build_main_screen()
-
-            if self.root is None:
-                raise RuntimeError("Kivy root screen is not available.")
-
-            self.root.clear_widgets()
-            self.root.add_widget(main_screen)
-            self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
-
-            print("[LAIBA] API connected. Chat Board opened successfully.")
-
-        except Exception as exc:
-            import traceback
-            error = traceback.format_exc()
-            print("[LAIBA CHAT BOARD ERROR]")
-            print(error)
-
-            self.verify_button.disabled = False
-            self.setup_status.text = (
-                "API connected, but Chat Board failed: " + str(exc)
-            )
+        screen = self.build_main_screen()
+        self.root.clear_widgets()
+        self.root.add_widget(screen)
 
     def build_main_screen(self):
-        self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
-        self.chatbot = ChatbotEngine()
-        self.threed_engine = ThreeDEngine()
+        self.title = "Laiba Assistant"
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(10),
+            spacing=dp(8)
+        )
 
-        root_layout = BoxLayout(orientation='vertical', padding=8, spacing=8)
+        with root.canvas.before:
+            Color(0.012, 0.022, 0.05, 1)
+            bg = Rectangle(pos=root.pos, size=root.size)
+        root.bind(
+            pos=lambda obj, val: setattr(bg, "pos", val),
+            size=lambda obj, val: setattr(bg, "size", val)
+        )
 
-        # Header
-        header = BoxLayout(size_hint_y=None, height=45, spacing=5)
-        lbl_title = Label(
-            text="[b]⚡ LAIBA AI APK[/b]",
+        header = BoxLayout(
+            size_hint_y=None,
+            height=dp(48),
+            spacing=dp(6)
+        )
+        header.add_widget(Label(
+            text="[b]⚡ LAIBA AI[/b]",
             markup=True,
-            color=(0, 1, 0.8, 1),
-            font_size='18sp'
-        )
-        header.add_widget(lbl_title)
+            color=(0, 0.9, 1, 1),
+            font_size="20sp",
+            halign="left"
+        ))
 
-        btn_zip = Button(
-            text="📦 Zip & Share",
+        self.network_label = Label(
+            text="● Checking...",
+            color=(1, 0.8, 0.25, 1),
             size_hint_x=None,
-            width=110,
-            background_color=(0.02, 0.59, 0.41, 1)
+            width=dp(115),
+            font_size="12sp"
         )
-        btn_zip.bind(on_release=self.export_zip)
-        header.add_widget(btn_zip)
+        header.add_widget(self.network_label)
 
-        root_layout.add_widget(header)
-
-
-        # 3D View Widget
-        self.three_d_widget = ThreeDCanvasWidget(self.threed_engine, size_hint_y=0.35)
-        root_layout.add_widget(self.three_d_widget)
-
-        # 3D Controls
-        ctrl_row = BoxLayout(size_hint_y=None, height=35, spacing=5)
-        btn_rot_x = Button(text="Rot X", background_color=(0.12, 0.16, 0.22, 1))
-        btn_rot_x.bind(on_release=lambda x: self.rotate_mesh(15, 0, 0))
-
-        btn_rot_y = Button(text="Rot Y", background_color=(0.12, 0.16, 0.22, 1))
-        btn_rot_y.bind(on_release=lambda x: self.rotate_mesh(0, 15, 0))
-
-        btn_shape = Button(text="Cube / Pyramid", background_color=(0.07, 0.09, 0.15, 1))
-        btn_shape.bind(on_release=self.toggle_shape)
-
-        ctrl_row.add_widget(btn_rot_x)
-        ctrl_row.add_widget(btn_rot_y)
-        ctrl_row.add_widget(btn_shape)
-        root_layout.add_widget(ctrl_row)
-
-        # Chat Log Box
-        self.chat_log = TextInput(
-            text="System: Laiba APK Environment Initialized.\nSystem: Text chat is available when a Gemini API key is configured.\nSystem: Voice and camera integrations are not enabled in this build.\n\n",
-            readonly=True,
-            multiline=True,
-            background_color=(0.03, 0.03, 0.03, 1),
-            foreground_color=(0.95, 0.95, 0.95, 1),
-            size_hint_y=0.45
+        zip_button = Button(
+            text="ZIP",
+            size_hint_x=None,
+            width=dp(58),
+            background_normal="",
+            background_color=(0.02, 0.38, 0.48, 1)
         )
-        root_layout.add_widget(self.chat_log)
+        zip_button.bind(on_release=self.export_zip)
+        header.add_widget(zip_button)
+        root.add_widget(header)
 
-        # Input Box Row
-        input_row = BoxLayout(size_hint_y=None, height=45, spacing=5)
+        self.three_d_widget = ThreeDCanvasWidget(
+            self.threed_engine,
+            size_hint_y=0.23
+        )
+        root.add_widget(self.three_d_widget)
+
+        controls = BoxLayout(
+            size_hint_y=None,
+            height=dp(38),
+            spacing=dp(6)
+        )
+        for label, callback in [
+            ("Rotate X", lambda x: self.rotate_mesh(15, 0, 0)),
+            ("Rotate Y", lambda x: self.rotate_mesh(0, 15, 0)),
+            ("Cube / Pyramid", self.toggle_shape)
+        ]:
+            button = Button(
+                text=label,
+                background_normal="",
+                background_color=(0.06, 0.13, 0.21, 1),
+                color=(0.5, 0.95, 1, 1),
+                font_size="12sp"
+            )
+            button.bind(on_release=callback)
+            controls.add_widget(button)
+        root.add_widget(controls)
+
+        self.chat_scroll = ScrollView(
+            size_hint=(1, 1),
+            do_scroll_x=False,
+            bar_width=dp(3)
+        )
+        self.message_list = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(10),
+            padding=(dp(3), dp(8))
+        )
+        self.message_list.bind(
+            minimum_height=self.message_list.setter("height")
+        )
+        self.chat_scroll.add_widget(self.message_list)
+        root.add_widget(self.chat_scroll)
+
+        if self.chat_history:
+            for item in self.chat_history[-60:]:
+                self.add_bubble(
+                    item.get("text", ""),
+                    item.get("sender", "Laiba"),
+                    save=False
+                )
+        else:
+            self.add_bubble(
+                "Assalam-o-Alaikum! Main Laiba hoon. Aap mujh se Urdu, Roman Urdu ya English mein baat kar sakte hain.",
+                "Laiba"
+            )
+
+        input_row = BoxLayout(
+            size_hint_y=None,
+            height=dp(52),
+            spacing=dp(7)
+        )
+        # Camera, Gallery, Live Camera and Microphone buttons
+        media_buttons = [
+            ("📷", self.open_camera, "Camera"),
+            ("🖼️", self.open_gallery, "Gallery"),
+            ("🎥", self.open_live_camera, "Live Camera"),
+            ("🎙️", self.open_microphone, "Microphone"),
+        ]
+        for icon_text, callback, tooltip_text in media_buttons:
+            media_button = Button(
+                text=icon_text,
+                size_hint_x=None,
+                width=dp(43),
+                background_normal="",
+                background_color=(0.02, 0.25, 0.34, 1),
+                color=(0.3, 0.95, 1, 1),
+                font_size="18sp"
+            )
+            media_button.bind(on_release=callback)
+            input_row.add_widget(media_button)
+
         self.user_input = TextInput(
-            hint_text="Type message or command...",
+            hint_text="Message Laiba...",
             multiline=False,
-            background_color=(0.08, 0.08, 0.08, 1),
-            foreground_color=(1, 1, 1, 1)
+            background_color=(0.055, 0.085, 0.14, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0, 0.9, 1, 1),
+            hint_text_color=(0.5, 0.65, 0.75, 1),
+            padding=(dp(12), dp(13))
         )
         self.user_input.bind(on_text_validate=self.send_message)
 
-        btn_send = Button(
-            text="Send ⚡",
+        send_button = Button(
+            text="➤",
             size_hint_x=None,
-            width=80,
-            background_color=(0, 1, 0.8, 1),
-            color=(0, 0, 0, 1)
+            width=dp(58),
+            background_normal="",
+            background_color=(0, 0.68, 0.78, 1),
+            color=(0, 0.04, 0.08, 1),
+            font_size="22sp"
         )
-        btn_send.bind(on_release=self.send_message)
-
+        send_button.bind(on_release=self.send_message)
         input_row.add_widget(self.user_input)
-        input_row.add_widget(btn_send)
-        root_layout.add_widget(input_row)
+        input_row.add_widget(send_button)
+        root.add_widget(input_row)
 
-        return root_layout
+        Clock.schedule_once(lambda dt: self.check_network(), 0.5)
+        Clock.schedule_interval(lambda dt: self.check_network(), 30)
+        return root
 
-    def save_api_key(self, instance):
-        result = self.chatbot.set_api_key(self.api_key_input.text)
-        self.api_key_input.text = ""
-        self.chat_log.text += f"System: {result}\n\n"
+    def add_bubble(self, message, sender="Laiba", save=True):
+        message = str(message)
+        row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            spacing=dp(4)
+        )
+        bubble = ChatBubble(message, sender=sender)
+        bubble.bind(minimum_height=row.setter("height"))
+
+        if sender == "You":
+            row.add_widget(Widget())
+            row.add_widget(bubble)
+        else:
+            row.add_widget(bubble)
+            row.add_widget(Widget())
+
+        self.message_list.add_widget(row)
+        Clock.schedule_once(
+            lambda dt: setattr(self.chat_scroll, "scroll_y", 0), 0.1
+        )
+
+        if save:
+            self.chat_history.append({"sender": sender, "text": message})
+            self.save_history()
+
+    def check_network(self):
+        if getattr(self, "_network_check_running", False):
+            return
+
+        self._network_check_running = True
+
+        def worker():
+            online = False
+            try:
+                import requests
+                response = requests.get(
+                    "https://www.google.com/generate_204",
+                    timeout=(3, 6),
+                    headers={"Cache-Control": "no-cache"}
+                )
+                online = 200 <= response.status_code < 400
+                response.close()
+            except Exception:
+                online = False
+            finally:
+                self._network_check_running = False
+                Clock.schedule_once(
+                    lambda dt: self.update_network_status(online), 0
+                )
+
+        Thread(target=worker, daemon=True).start()
+
+    def update_network_status(self, online):
+        if not hasattr(self, "network_label"):
+            return
+        if online:
+            self.network_label.text = "● Online"
+            self.network_label.color = (0.2, 1, 0.65, 1)
+        else:
+            self.network_label.text = "● Offline"
+            self.network_label.color = (1, 0.35, 0.35, 1)
 
     def rotate_mesh(self, dx, dy, dz):
         self.threed_engine.rotate(dx, dy, dz)
@@ -306,26 +488,56 @@ class LaibaKivyApp(App):
             self.threed_engine.load_cube()
         self.three_d_widget.update_canvas()
 
+    def open_camera(self, *args):
+        self.media_bridge.camera()
+
+    def open_gallery(self, *args):
+        self.media_bridge.gallery()
+
+    def open_live_camera(self, *args):
+        self.media_bridge.live_camera()
+
+    def open_microphone(self, *args):
+        self.media_bridge.microphone()
+
     def send_message(self, *args):
-        from threading import Thread
-        from kivy.clock import Clock
         text = self.user_input.text.strip()
         if not text:
             return
+
         self.user_input.text = ""
-        self.chat_log.text += f"You: {text}\nLaiba: thinking...\n"
+        self.add_bubble(text, "You")
+        thinking = Label(
+            text="Laiba is thinking...",
+            color=(0, 0.85, 1, 1),
+            size_hint_y=None,
+            height=dp(32)
+        )
+        self.message_list.add_widget(thinking)
+
         def worker():
-            result = self.chatbot.process_message(text)
-            Clock.schedule_once(lambda dt: self._append_reply(result), 0)
+            try:
+                result = self.chatbot.process_message(text)
+            except Exception as exc:
+                result = "Network or AI error: " + str(exc)
+            Clock.schedule_once(
+                lambda dt: self.finish_reply(result, thinking), 0
+            )
+
         Thread(target=worker, daemon=True).start()
 
-    def _append_reply(self, result):
-        self.chat_log.text = self.chat_log.text.replace("Laiba: thinking...\n", "")
-        self.chat_log.text += f"Laiba: {result}\n\n"
+    def finish_reply(self, result, thinking):
+        if thinking.parent:
+            thinking.parent.remove_widget(thinking)
+        self.add_bubble(str(result), "Laiba")
 
     def export_zip(self, instance):
-        res = self.chatbot.export_project_zip()
-        self.chat_log.text += f"System: {res.get('message', res)}\n\n"
+        try:
+            result = self.chatbot.export_project_zip()
+            message = result.get("message", result)
+        except Exception as exc:
+            message = "ZIP export error: " + str(exc)
+        self.add_bubble(str(message), "Laiba")
 
 
 if __name__ == "__main__":

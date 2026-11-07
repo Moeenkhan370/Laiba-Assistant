@@ -1,8 +1,10 @@
 """Laiba central brain. Uses Gemini REST so no desktop-only SDK is required."""
 import json
 import os
+import mimetypes
 import re
 import zipfile
+import time
 from pathlib import Path
 from urllib.parse import quote
 import requests
@@ -29,6 +31,60 @@ class ChatbotEngine:
         self.router = CommandRouter()
         self.chat_history = []
         self.session = requests.Session()
+
+        self.history_file = None
+        try:
+            from kivy.app import App
+            app = App.get_running_app()
+            if app and app.user_data_dir:
+                self.history_file = Path(app.user_data_dir) / "gemini_history.json"
+        except Exception:
+            self.history_file = self.project_root / "gemini_history.json"
+
+        self.load_chat_history()
+
+    def load_chat_history(self):
+        if not self.history_file:
+            return
+        try:
+            if self.history_file.is_file():
+                data = json.loads(self.history_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    self.chat_history = data[-24:]
+        except Exception as exc:
+            print("[LAIBA] History load error:", exc)
+            self.chat_history = []
+
+    def save_chat_history(self):
+        if not self.history_file:
+            return
+        try:
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
+            safe_history = []
+            for item in self.chat_history[-24:]:
+                safe_item = {"role": item.get("role"), "parts": []}
+                for part in item.get("parts", []):
+                    if "text" in part:
+                        safe_item["parts"].append({"text": part["text"]})
+                    elif "inline_data" in part:
+                        safe_item["parts"].append({
+                            "text": "[Image was attached in this conversation]"
+                        })
+                safe_history.append(safe_item)
+
+            temporary = self.history_file.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(safe_history, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            temporary.replace(self.history_file)
+        except Exception as exc:
+            print("[LAIBA] History save error:", exc)
+
+    def clear_chat_history(self):
+        self.chat_history = []
+        self.save_chat_history()
+        return "Gemini conversation history cleared."
 
     def init_gemini(self):
         return bool(self.api_key)
@@ -57,7 +113,7 @@ class ChatbotEngine:
                 url = "{}/models/{}".format(
                     self.api_base.rstrip("/"), quote(model, safe="-")
                 )
-                response = self.session.get(
+                response = self._request_with_retry("GET",
                     url, params={"key": key}, timeout=self.timeout
                 )
 
@@ -105,7 +161,7 @@ class ChatbotEngine:
             url = "{}/models/{}".format(
                 self.api_base.rstrip("/"), quote(self.model_name, safe="-")
             )
-            response = self.session.get(
+            response = self._request_with_retry("GET",
                 url, params={"key": self.api_key}, timeout=self.timeout
             )
             if response.ok:
@@ -167,6 +223,26 @@ class ChatbotEngine:
             return "Build from the project root with: buildozer android debug. This project includes a Buildozer spec; successful APK creation still depends on a compatible ARM64/Ubuntu toolchain."
         return None
 
+    def _request_with_retry(self, method, url, **kwargs):
+        retry_statuses = {429, 500, 502, 503, 504}
+
+        for attempt in range(3):
+            try:
+                response = self.session.request(method, url, **kwargs)
+
+                if response.status_code not in retry_statuses or attempt == 2:
+                    return response
+
+                response.close()
+
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == 2:
+                    raise
+
+            time.sleep(1 + attempt)
+
+        raise requests.RequestException("Request failed after retries.")
+
     def _gemini(self, prompt, image_path=None):
         if not self.api_key:
             return "Gemini is not connected. Add an API key in Laiba settings before using online AI."
@@ -174,22 +250,43 @@ class ChatbotEngine:
         parts = [{"text": prompt}]
         if image_path:
             image = Path(image_path)
-            if not image.is_file(): return "Image file was not found."
-            mime = "image/png" if image.suffix.lower() == ".png" else "image/jpeg"
-            import base64
-            parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(image.read_bytes()).decode("ascii")}})
+            if not image.is_file():
+                return "Image file was not found."
+
+            mime, _ = mimetypes.guess_type(str(image))
+            if mime not in {"image/jpeg", "image/png", "image/webp"}:
+                return "Unsupported image format. Use JPG, PNG, or WEBP."
+
+            try:
+                image_bytes = image.read_bytes()
+                if len(image_bytes) > 20 * 1024 * 1024:
+                    return "Image is too large. Maximum size is 20 MB."
+
+                import base64
+                parts.append({
+                    "inline_data": {
+                        "mime_type": mime,
+                        "data": base64.b64encode(image_bytes).decode("ascii")
+                    }
+                })
+            except OSError as exc:
+                return "Could not read image: {}".format(exc)
         history = self.chat_history[-12:]
         contents = list(history) + [{"role": "user", "parts": parts}]
         payload = {"system_instruction": {"parts": [{"text": "You are Laiba, a helpful assistant. Understand Urdu, Roman Urdu, English, and mixed language. Never claim a device action succeeded unless it was actually executed."}]}, "contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}}
         try:
-            response = self.session.post(url, params={"key": self.api_key}, json=payload, timeout=self.timeout)
+            response = self._request_with_retry("POST", url, params={"key": self.api_key}, json=payload, timeout=self.timeout)
             if not response.ok:
                 return "Gemini API error (HTTP {}): {}".format(response.status_code, self._safe_error(response))
             data = response.json()
             answer = "".join(p.get("text", "") for p in data.get("candidates", [{}])[0].get("content", {}).get("parts", []))
             if not answer: return "Gemini returned an empty response."
-            self.chat_history.extend([{"role": "user", "parts": [{"text": prompt}]}, {"role": "model", "parts": [{"text": answer}]}])
+            self.chat_history.extend([
+                {"role": "user", "parts": parts},
+                {"role": "model", "parts": [{"text": answer}]}
+            ])
             self.chat_history = self.chat_history[-24:]
+            self.save_chat_history()
             return answer
         except requests.Timeout:
             return "Gemini request timed out. Please try again."
