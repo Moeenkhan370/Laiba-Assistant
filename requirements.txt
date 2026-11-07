@@ -1,0 +1,5 @@
+# Desktop/host development dependencies only; Buildozer Android requirements
+# are declared separately in buildozer.spec.
+requests>=2.31,<3
+Kivy>=2.3,<3
+Pillow>=10,<12

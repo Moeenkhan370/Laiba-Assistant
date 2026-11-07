@@ -1,0 +1,13 @@
+.buildozer/
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+*.apk
+*.aab
+backup/
+exports/
+.laiba_backups/
+*.tar.gz
+*.zip
