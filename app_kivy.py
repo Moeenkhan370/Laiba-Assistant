@@ -6,6 +6,7 @@ Includes a Kivy UI, lightweight mesh preview, and Gemini text/image request engi
 
 import os
 import sys
+import config as app_config
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
@@ -53,6 +54,139 @@ class ThreeDCanvasWidget(BoxLayout):
 
 class LaibaKivyApp(App):
     def build(self):
+        # Store API settings inside Android app-private storage.
+        app_config.CONFIG_FILE = os.path.join(
+            self.user_data_dir, "laiba_config.json"
+        )
+
+        saved_config = app_config.load_config()
+        CURRENT_CONFIG.clear()
+        CURRENT_CONFIG.update(saved_config)
+
+        # Migrate retired Gemini model to the current stable model.
+        if CURRENT_CONFIG.get("GEMINI_MODEL") == "gemini-2.0-flash":
+            CURRENT_CONFIG["GEMINI_MODEL"] = "gemini-3.8-flash"
+
+        self.title = "Google Gemini AI Setup"
+        self.chatbot = ChatbotEngine()
+        self.threed_engine = ThreeDEngine()
+
+        if self.chatbot.api_key:
+            self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
+            return self.build_main_screen()
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=24,
+            spacing=16
+        )
+
+        root.add_widget(Label(
+            text="[b]CONNECT GOOGLE GEMINI AI[/b]",
+            markup=True,
+            font_size="23sp",
+            color=(0, 1, 0.8, 1),
+            size_hint_y=None,
+            height=80
+        ))
+
+        root.add_widget(Label(
+            text="Enter your Google Gemini AI API Key to activate Laiba.",
+            font_size="16sp",
+            color=(1, 1, 1, 1),
+            halign="center",
+            size_hint_y=None,
+            height=65
+        ))
+
+        self.api_key_input = TextInput(
+            hint_text="Paste your Google Gemini AI API Key",
+            password=True,
+            multiline=False,
+            size_hint_y=None,
+            height=55,
+            background_color=(0.08, 0.08, 0.08, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0, 1, 0.8, 1)
+        )
+        self.api_key_input.bind(
+            on_text_validate=self.verify_api_key
+        )
+        root.add_widget(self.api_key_input)
+
+        self.verify_button = Button(
+            text="VERIFY CONNECTION",
+            size_hint_y=None,
+            height=55,
+            background_color=(0, 0.65, 0.48, 1),
+            color=(1, 1, 1, 1)
+        )
+        self.verify_button.bind(
+            on_release=self.verify_api_key
+        )
+        root.add_widget(self.verify_button)
+
+        self.setup_status = Label(
+            text="Create your API key in Google AI Studio, then paste it here.",
+            color=(0.7, 0.7, 0.7, 1),
+            halign="center"
+        )
+        root.add_widget(self.setup_status)
+
+        return root
+
+    def verify_api_key(self, instance):
+        from threading import Thread
+        from kivy.clock import Clock
+
+        key = self.api_key_input.text.strip()
+
+        if not key:
+            self.setup_status.text = "Please enter your Google Gemini AI API Key."
+            return
+
+        self.verify_button.disabled = True
+        self.setup_status.text = "Verifying your Google Gemini AI connection..."
+
+        def worker():
+            old_key = self.chatbot.api_key
+            self.chatbot.api_key = key
+
+            try:
+                result = self.chatbot.test_api_connection()
+                ok = bool(result.get("ok"))
+                message = str(result.get("message", "Verification failed."))
+
+                if ok:
+                    save_result = self.chatbot.set_api_key(key)
+                    if "saved successfully" not in save_result.lower():
+                        ok = False
+                        message = save_result
+            except Exception as exc:
+                ok = False
+                message = str(exc)
+            finally:
+                if not ok:
+                    self.chatbot.api_key = old_key
+
+            message = message.replace(key, "[HIDDEN]")
+            Clock.schedule_once(
+                lambda dt: self._finish_api_verification(ok, message), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _finish_api_verification(self, ok, message):
+        if ok:
+            self.setup_status.text = "Google Gemini AI connected successfully!"
+            self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
+            self.root.clear_widgets()
+            self.root.add_widget(self.build_main_screen())
+        else:
+            self.verify_button.disabled = False
+            self.setup_status.text = "Connection failed: " + message
+
+    def build_main_screen(self):
         self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
         self.chatbot = ChatbotEngine()
         self.threed_engine = ThreeDEngine()
@@ -80,19 +214,6 @@ class LaibaKivyApp(App):
 
         root_layout.add_widget(header)
 
-        # API key setup is explicit; the key is stored in the app-private config.
-        key_row = BoxLayout(size_hint_y=None, height=40, spacing=5)
-        self.api_key_input = TextInput(
-            hint_text="Gemini API key (stored privately on this device)",
-            password=True, multiline=False,
-            background_color=(0.08, 0.08, 0.08, 1),
-            foreground_color=(1, 1, 1, 1)
-        )
-        btn_save_key = Button(text="Save Key", size_hint_x=None, width=90)
-        btn_save_key.bind(on_release=self.save_api_key)
-        key_row.add_widget(self.api_key_input)
-        key_row.add_widget(btn_save_key)
-        root_layout.add_widget(key_row)
 
         # 3D View Widget
         self.three_d_widget = ThreeDCanvasWidget(self.threed_engine, size_hint_y=0.35)

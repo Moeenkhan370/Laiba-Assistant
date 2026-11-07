@@ -1,6 +1,7 @@
 """Laiba central brain. Uses Gemini REST so no desktop-only SDK is required."""
 import json
 import os
+import re
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -34,12 +35,26 @@ class ChatbotEngine:
 
     def set_api_key(self, key):
         key = str(key or "").strip().strip('"').strip("'")
+        key = re.sub(r"\\s+", "", key)
+
         if not key:
-            return "API key is empty; nothing was changed."
+            return "API key is empty. Nothing was changed."
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
+            return "Invalid API key format. Check the copied key and try again."
+
+        old_key = self.api_key
+        old_config_key = CURRENT_CONFIG.get("GEMINI_API_KEY", "")
+
         self.api_key = key
         CURRENT_CONFIG["GEMINI_API_KEY"] = key
-        save_config(CURRENT_CONFIG)
-        return "API key saved locally. Use test_api_connection() to verify it."
+
+        if not save_config(CURRENT_CONFIG):
+            self.api_key = old_key
+            CURRENT_CONFIG["GEMINI_API_KEY"] = old_config_key
+            return "API key could not be saved. Previous settings restored."
+
+        return "API key saved successfully. Now test the Gemini connection."
 
     def test_api_connection(self):
         if not self.api_key:

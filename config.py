@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
     "APP_NAME": "Laiba Assistant",
     "VERSION": "1.0.0",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
-    "GEMINI_MODEL": "gemini-2.0-flash",
+    "GEMINI_MODEL": "gemini-3.8-flash",
     "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta",
     "GEMINI_TIMEOUT": 30,
     "UPDATE_SERVER_URL": "",  # Configure a real JSON manifest URL before enabling update checks.

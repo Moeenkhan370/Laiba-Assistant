@@ -3,6 +3,7 @@ title = Laiba Assistant
 package.name = laibaassistant
 package.domain = com.moeen
 source.dir = .
+icon.filename = %(source.dir)s/assets/laiba_icon.png
 source.include_exts = py,kv,png,jpg,jpeg,json,txt,md,obj,stl,ply
 source.exclude_dirs = .git,venv,.venv,env,__pycache__,.buildozer,bin,exports,.laiba_backups,backup
 version = 1.0.1
