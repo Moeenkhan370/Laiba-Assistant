@@ -39,8 +39,8 @@ class ChatbotEngine:
         if not key:
             return "API key is empty. Nothing was changed."
 
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
-            return "Invalid API key format. Check the copied key and try again."
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in key):
+            return "API key contains hidden control characters. Copy it again."
 
         old_key = self.api_key
         old_config_key = CURRENT_CONFIG.get("GEMINI_API_KEY", "")

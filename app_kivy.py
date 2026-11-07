@@ -159,7 +159,7 @@ class LaibaKivyApp(App):
 
                 if ok:
                     save_result = self.chatbot.set_api_key(key)
-                    if "saved successfully" not in save_result.lower():
+                    if not save_result.lower().startswith("api key saved"):
                         ok = False
                         message = save_result
             except Exception as exc:
