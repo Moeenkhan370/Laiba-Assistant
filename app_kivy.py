@@ -177,14 +177,33 @@ class LaibaKivyApp(App):
         Thread(target=worker, daemon=True).start()
 
     def _finish_api_verification(self, ok, message):
-        if ok:
-            self.setup_status.text = "Google Gemini AI connected successfully!"
-            self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
-            self.root.clear_widgets()
-            self.root.add_widget(self.build_main_screen())
-        else:
+        if not ok:
             self.verify_button.disabled = False
-            self.setup_status.text = "Connection failed: " + message
+            self.setup_status.text = "Connection failed: " + str(message)
+            return
+
+        try:
+            main_screen = self.build_main_screen()
+
+            if self.root is None:
+                raise RuntimeError("Kivy root screen is not available.")
+
+            self.root.clear_widgets()
+            self.root.add_widget(main_screen)
+            self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
+
+            print("[LAIBA] API connected. Chat Board opened successfully.")
+
+        except Exception as exc:
+            import traceback
+            error = traceback.format_exc()
+            print("[LAIBA CHAT BOARD ERROR]")
+            print(error)
+
+            self.verify_button.disabled = False
+            self.setup_status.text = (
+                "API connected, but Chat Board failed: " + str(exc)
+            )
 
     def build_main_screen(self):
         self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")

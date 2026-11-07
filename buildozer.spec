@@ -18,7 +18,7 @@ android.ndk = 28c
 android.ndk_path = /root/.buildozer/android/platform/android-ndk-r28c
 android.minapi = 24
 android.archs = arm64-v8a
-android.permissions = INTERNET,ACCESS_NETWORK_STATE
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,RECORD_AUDIO,FOREGROUND_SERVICE,FOREGROUND_SERVICE_MICROPHONE,READ_MEDIA_IMAGES,READ_MEDIA_VIDEO,READ_MEDIA_AUDIO,READ_MEDIA_VISUAL_USER_SELECTED,READ_EXTERNAL_STORAGE
 android.accept_sdk_license = True
 android.allow_backup = False
 
