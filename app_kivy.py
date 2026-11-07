@@ -64,7 +64,7 @@ class LaibaKivyApp(App):
         CURRENT_CONFIG.update(saved_config)
 
         # Migrate retired Gemini model to the current stable model.
-        if CURRENT_CONFIG.get("GEMINI_MODEL") == "gemini-2.0-flash":
+        if CURRENT_CONFIG.get("GEMINI_MODEL") not in ("gemini-3.8-flash", "gemini-3.5-flash"):
             CURRENT_CONFIG["GEMINI_MODEL"] = "gemini-3.8-flash"
 
         self.title = "Google Gemini AI Setup"

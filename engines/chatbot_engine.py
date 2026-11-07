@@ -17,7 +17,7 @@ class ChatbotEngine:
     def __init__(self, project_root=None):
         self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
         self.api_key = str(CURRENT_CONFIG.get("GEMINI_API_KEY", "")).strip()
-        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "gemini-2.0-flash")
+        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "gemini-3.8-flash")
         self.api_base = CURRENT_CONFIG.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
         self.timeout = int(CURRENT_CONFIG.get("GEMINI_TIMEOUT", 30))
         self.is_speaking = False
@@ -34,8 +34,7 @@ class ChatbotEngine:
         return bool(self.api_key)
 
     def set_api_key(self, key):
-        key = str(key or "").strip().strip('"').strip("'")
-        key = re.sub(r"\\s+", "", key)
+        key = re.sub(r"\s+", "", str(key or "").strip().strip('"').strip("'"))
 
         if not key:
             return "API key is empty. Nothing was changed."
@@ -45,28 +44,80 @@ class ChatbotEngine:
 
         old_key = self.api_key
         old_config_key = CURRENT_CONFIG.get("GEMINI_API_KEY", "")
+        old_model = self.model_name
+        old_config_model = CURRENT_CONFIG.get("GEMINI_MODEL", "")
 
         self.api_key = key
-        CURRENT_CONFIG["GEMINI_API_KEY"] = key
 
-        if not save_config(CURRENT_CONFIG):
+        try:
+            available_model = None
+            errors = []
+
+            for model in ("gemini-3.8-flash", "gemini-3.5-flash"):
+                url = "{}/models/{}".format(
+                    self.api_base.rstrip("/"), quote(model, safe="-")
+                )
+                response = self.session.get(
+                    url, params={"key": key}, timeout=self.timeout
+                )
+
+                if response.ok:
+                    try:
+                        data = response.json()
+                        methods = data.get("supportedGenerationMethods", [])
+                        if methods and "generateContent" not in methods:
+                            errors.append(model + ": generateContent unavailable")
+                            continue
+                    except ValueError:
+                        pass
+
+                    available_model = model
+                    break
+
+                errors.append("{}: HTTP {}".format(model, response.status_code))
+
+            if not available_model:
+                self.api_key = old_key
+                return "No supported Gemini model found. Previous key retained. " + "; ".join(errors)
+
+            self.model_name = available_model
+            CURRENT_CONFIG["GEMINI_API_KEY"] = key
+            CURRENT_CONFIG["GEMINI_MODEL"] = available_model
+
+            if not save_config(CURRENT_CONFIG):
+                self.api_key = old_key
+                self.model_name = old_model
+                CURRENT_CONFIG["GEMINI_API_KEY"] = old_config_key
+                CURRENT_CONFIG["GEMINI_MODEL"] = old_config_model
+                return "Settings could not be saved. Previous settings restored."
+
+            return "API key saved. Automatically selected " + available_model
+
+        except requests.RequestException as exc:
             self.api_key = old_key
-            CURRENT_CONFIG["GEMINI_API_KEY"] = old_config_key
-            return "API key could not be saved. Previous settings restored."
-
-        return "API key saved successfully. Now test the Gemini connection."
+            self.model_name = old_model
+            return "Gemini connection failed. Previous key retained: " + str(exc)
 
     def test_api_connection(self):
         if not self.api_key:
             return {"ok": False, "message": "Gemini API key is not configured."}
         try:
-            url = "{}/models/{}".format(self.api_base.rstrip("/"), quote(self.model_name, safe="-"))
-            response = self.session.get(url, params={"key": self.api_key}, timeout=self.timeout)
+            url = "{}/models/{}".format(
+                self.api_base.rstrip("/"), quote(self.model_name, safe="-")
+            )
+            response = self.session.get(
+                url, params={"key": self.api_key}, timeout=self.timeout
+            )
             if response.ok:
-                return {"ok": True, "message": "Gemini model endpoint is reachable."}
-            return {"ok": False, "message": "Gemini returned HTTP {}: {}".format(response.status_code, self._safe_error(response))}
-        except requests.RequestException as exc:
-            return {"ok": False, "message": "Network error: {}".format(exc)}
+                return {"ok": True, "message": "Connected using " + self.model_name}
+            return {
+                "ok": False,
+                "message": "Gemini returned HTTP {}: {}".format(
+                    response.status_code, self._safe_error(response)
+                )
+            }
+        except requests.RequestException:
+            return {"ok": False, "message": "Gemini network connection failed."}
 
     @staticmethod
     def _safe_error(response):
