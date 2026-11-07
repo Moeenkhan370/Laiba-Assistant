@@ -22,7 +22,7 @@ android.accept_sdk_license = True
 android.allow_backup = False
 
 # Use the stable python-for-android branch; pinning SDK/NDK blindly is avoided.
-p4a.branch = stable
+p4a.branch = develop
 p4a.source_dir = .buildozer/android/platform/python-for-android-aab
 
 [buildozer]
