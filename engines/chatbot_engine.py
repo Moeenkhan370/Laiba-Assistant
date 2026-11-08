@@ -19,7 +19,8 @@ class ChatbotEngine:
     def __init__(self, project_root=None):
         self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
         self.api_key = str(CURRENT_CONFIG.get("GEMINI_API_KEY", "")).strip()
-        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "gemini-3.8-flash")
+        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "")
+        self.model_candidates = CURRENT_CONFIG.get("GEMINI_MODEL_CANDIDATES", [])
         self.api_base = CURRENT_CONFIG.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
         self.timeout = int(CURRENT_CONFIG.get("GEMINI_TIMEOUT", 30))
         self.is_speaking = False
@@ -89,91 +90,106 @@ class ChatbotEngine:
     def init_gemini(self):
         return bool(self.api_key)
 
-    def set_api_key(self, key):
-        key = re.sub(r"\s+", "", str(key or "").strip().strip('"').strip("'"))
+    def discover_flash_models(self, key=None):
+        key = key or self.api_key
+        if not key:
+            return []
 
+        models = []
+        page_token = None
+
+        for _ in range(10):
+            params = {"key": key, "pageSize": 100}
+            if page_token:
+                params["pageToken"] = page_token
+
+            response = self._request_with_retry(
+                "GET", self.api_base.rstrip("/") + "/models",
+                params=params, timeout=self.timeout
+            )
+            if not response.ok:
+                raise requests.RequestException(
+                    "ListModels HTTP {}: {}".format(
+                        response.status_code, self._safe_error(response)
+                    )
+                )
+
+            data = response.json()
+            for item in data.get("models", []):
+                name = str(item.get("name", "")).replace("models/", "")
+                methods = item.get("supportedGenerationMethods", [])
+                lower = name.lower()
+
+                if ("flash" in lower and
+                    "generateContent" in methods and
+                    not any(x in lower for x in (
+                        "tts", "live", "transcribe", "translate",
+                        "image", "embedding"
+                    ))):
+                    models.append(name)
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+        def version_key(name):
+            return tuple(int(x) for x in re.findall(r"[0-9]+", name))
+
+        return sorted(set(models), key=version_key, reverse=True)
+
+    def set_api_key(self, key):
+        key = re.sub(r"\\s+", "", str(key or "").strip().strip('"').strip("'"))
         if not key:
             return "API key is empty. Nothing was changed."
 
-        if any(ord(ch) < 32 or ord(ch) == 127 for ch in key):
-            return "API key contains hidden control characters. Copy it again."
-
         old_key = self.api_key
-        old_config_key = CURRENT_CONFIG.get("GEMINI_API_KEY", "")
         old_model = self.model_name
-        old_config_model = CURRENT_CONFIG.get("GEMINI_MODEL", "")
-
-        self.api_key = key
+        old_candidates = self.model_candidates
+        old_config = dict(CURRENT_CONFIG)
 
         try:
-            available_model = None
-            errors = []
+            candidates = self.discover_flash_models(key)
+            if not candidates:
+                return "No accessible Flash model supporting generateContent was found."
 
-            for model in ("gemini-3.8-flash", "gemini-3.5-flash"):
-                url = "{}/models/{}".format(
-                    self.api_base.rstrip("/"), quote(model, safe="-")
-                )
-                response = self._request_with_retry("GET",
-                    url, params={"key": key}, timeout=self.timeout
-                )
+            self.api_key = key
+            self.model_candidates = candidates
+            self.model_name = ""
 
-                if response.ok:
-                    try:
-                        data = response.json()
-                        methods = data.get("supportedGenerationMethods", [])
-                        if methods and "generateContent" not in methods:
-                            errors.append(model + ": generateContent unavailable")
-                            continue
-                    except ValueError:
-                        pass
-
-                    available_model = model
-                    break
-
-                errors.append("{}: HTTP {}".format(model, response.status_code))
-
-            if not available_model:
-                self.api_key = old_key
-                return "No supported Gemini model found. Previous key retained. " + "; ".join(errors)
-
-            self.model_name = available_model
             CURRENT_CONFIG["GEMINI_API_KEY"] = key
-            CURRENT_CONFIG["GEMINI_MODEL"] = available_model
+            CURRENT_CONFIG["GEMINI_MODEL"] = ""
+            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = candidates
 
             if not save_config(CURRENT_CONFIG):
+                CURRENT_CONFIG.clear()
+                CURRENT_CONFIG.update(old_config)
                 self.api_key = old_key
                 self.model_name = old_model
-                CURRENT_CONFIG["GEMINI_API_KEY"] = old_config_key
-                CURRENT_CONFIG["GEMINI_MODEL"] = old_config_model
+                self.model_candidates = old_candidates
                 return "Settings could not be saved. Previous settings restored."
 
-            return "API key saved. Automatically selected " + available_model
+            return "API key saved. Automatic Flash selection enabled. Found {} compatible models.".format(len(candidates))
 
-        except requests.RequestException as exc:
+        except Exception as exc:
             self.api_key = old_key
             self.model_name = old_model
-            return "Gemini connection failed. Previous key retained: " + str(exc)
+            self.model_candidates = old_candidates
+            return "Gemini model discovery failed: {}".format(str(exc)[:400])
 
     def test_api_connection(self):
         if not self.api_key:
             return {"ok": False, "message": "Gemini API key is not configured."}
         try:
-            url = "{}/models/{}".format(
-                self.api_base.rstrip("/"), quote(self.model_name, safe="-")
-            )
-            response = self._request_with_retry("GET",
-                url, params={"key": self.api_key}, timeout=self.timeout
-            )
-            if response.ok:
-                return {"ok": True, "message": "Connected using " + self.model_name}
+            candidates = self.discover_flash_models()
+            if not candidates:
+                return {"ok": False, "message": "No compatible Flash models found."}
+            self.model_candidates = candidates
             return {
-                "ok": False,
-                "message": "Gemini returned HTTP {}: {}".format(
-                    response.status_code, self._safe_error(response)
-                )
+                "ok": True,
+                "message": "Gemini connected. {} compatible Flash models discovered.".format(len(candidates))
             }
-        except requests.RequestException:
-            return {"ok": False, "message": "Gemini network connection failed."}
+        except Exception as exc:
+            return {"ok": False, "message": "Gemini discovery failed: {}".format(str(exc)[:300])}
 
     @staticmethod
     def _safe_error(response):
@@ -245,24 +261,21 @@ class ChatbotEngine:
 
     def _gemini(self, prompt, image_path=None):
         if not self.api_key:
-            return "Gemini is not connected. Add an API key in Laiba settings before using online AI."
-        url = "{}/models/{}:generateContent".format(self.api_base.rstrip("/"), quote(self.model_name, safe="-"))
+            return "Gemini is not connected. Add an API key in Laiba settings."
+
         parts = [{"text": prompt}]
         if image_path:
             image = Path(image_path)
             if not image.is_file():
                 return "Image file was not found."
-
             mime, _ = mimetypes.guess_type(str(image))
             if mime not in {"image/jpeg", "image/png", "image/webp"}:
                 return "Unsupported image format. Use JPG, PNG, or WEBP."
-
             try:
+                import base64
                 image_bytes = image.read_bytes()
                 if len(image_bytes) > 20 * 1024 * 1024:
                     return "Image is too large. Maximum size is 20 MB."
-
-                import base64
                 parts.append({
                     "inline_data": {
                         "mime_type": mime,
@@ -271,29 +284,80 @@ class ChatbotEngine:
                 })
             except OSError as exc:
                 return "Could not read image: {}".format(exc)
-        history = self.chat_history[-12:]
-        contents = list(history) + [{"role": "user", "parts": parts}]
-        payload = {"system_instruction": {"parts": [{"text": "You are Laiba, a helpful assistant. Understand Urdu, Roman Urdu, English, and mixed language. Never claim a device action succeeded unless it was actually executed."}]}, "contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}}
+
         try:
-            response = self._request_with_retry("POST", url, params={"key": self.api_key}, json=payload, timeout=self.timeout)
-            if not response.ok:
-                return "Gemini API error (HTTP {}): {}".format(response.status_code, self._safe_error(response))
-            data = response.json()
-            answer = "".join(p.get("text", "") for p in data.get("candidates", [{}])[0].get("content", {}).get("parts", []))
-            if not answer: return "Gemini returned an empty response."
-            self.chat_history.extend([
-                {"role": "user", "parts": parts},
-                {"role": "model", "parts": [{"text": answer}]}
-            ])
-            self.chat_history = self.chat_history[-24:]
-            self.save_chat_history()
-            return answer
-        except requests.Timeout:
-            return "Gemini request timed out. Please try again."
+            candidates = self.model_candidates
+            if not candidates:
+                candidates = self.discover_flash_models()
+                self.model_candidates = candidates
+
+            if not candidates:
+                return "No compatible Gemini Flash models are available."
+
+            history = self.chat_history[-12:]
+            contents = list(history) + [{"role": "user", "parts": parts}]
+            payload = {
+                "system_instruction": {"parts": [{
+                    "text": "You are Laiba, a helpful assistant. Understand Urdu, Roman Urdu, English, and mixed language. Never claim a device action succeeded unless it was actually executed."
+                }]},
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 1024
+                }
+            }
+
+            errors = []
+            for model in candidates:
+                url = "{}/models/{}:generateContent".format(
+                    self.api_base.rstrip("/"), quote(model, safe="-")
+                )
+                try:
+                    response = self._request_with_retry(
+                        "POST", url, params={"key": self.api_key},
+                        json=payload, timeout=self.timeout
+                    )
+                    if not response.ok:
+                        errors.append("{}: HTTP {}".format(model, response.status_code))
+                        continue
+
+                    data = response.json()
+                    answer = "".join(
+                        p.get("text", "")
+                        for p in data.get("candidates", [{}])[0]
+                        .get("content", {}).get("parts", [])
+                    )
+                    if not answer:
+                        errors.append("{}: empty response".format(model))
+                        continue
+
+                    self.model_name = model
+                    CURRENT_CONFIG["GEMINI_MODEL"] = ""
+                    CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = self.model_candidates
+                    save_config(CURRENT_CONFIG)
+
+                    self.chat_history.extend([
+                        {"role": "user", "parts": parts},
+                        {"role": "model", "parts": [{"text": answer}]}
+                    ])
+                    self.chat_history = self.chat_history[-24:]
+                    self.save_chat_history()
+                    print("[LAIBA] Active Gemini model:", model)
+                    return answer
+
+                except requests.RequestException as exc:
+                    errors.append("{}: {}".format(model, str(exc)[:120]))
+                    continue
+                except (ValueError, KeyError, IndexError) as exc:
+                    errors.append("{}: invalid response".format(model))
+                    continue
+
+            return "All discovered Gemini Flash models failed. " + "; ".join(errors[:8])
+
         except requests.RequestException as exc:
-            return "Network error while contacting Gemini: {}".format(str(exc).replace(self.api_key, "[REDACTED]") if self.api_key else str(exc))
-        except (ValueError, KeyError, IndexError) as exc:
-            return "Could not parse Gemini response: {}".format(exc)
+            return "Gemini network/discovery error: {}".format(
+                str(exc).replace(self.api_key, "[REDACTED]")
+            )
 
     def process_message(self, user_text, image_path=None):
         text = str(user_text or "").strip()
