@@ -24,10 +24,23 @@ class AndroidMediaBridge:
         try:
             from android.permissions import request_permissions
             def result(perms, grants):
-                if all(bool(x) for x in grants):
-                    callback()
-                else:
-                    self.message("Android permission denied: " + ", ".join(names))
+                try:
+                    details = ", ".join(
+                        str(permission) + "=" + str(grant)
+                        for permission, grant in zip(perms, grants)
+                    )
+                    print("LAIBA_PERMISSION_RESULT:", details)
+
+                    if grants and all(bool(x) for x in grants):
+                        callback()
+                    else:
+                        self.message(
+                            "Android permission denied: " + details
+                        )
+                except Exception as exc:
+                    self.message(
+                        "Permission callback error: " + str(exc)
+                    )
             request_permissions(names, result)
         except Exception as exc:
             self.message("Android permission error: " + str(exc))
@@ -60,6 +73,9 @@ class AndroidMediaBridge:
             Intent = autoclass("android.content.Intent")
             ContentValues = autoclass("android.content.ContentValues")
             MediaStore = autoclass("android.provider.MediaStore")
+            MediaStoreImages = autoclass(
+                "android.provider.MediaStore$Images$Media"
+            )
             BuildVersion = autoclass("android.os.Build$VERSION")
 
             activity = PythonActivity.mActivity
@@ -70,20 +86,20 @@ class AndroidMediaBridge:
                 "Laiba_" + str(__import__("time").time_ns()) + ".jpg"
             )
             values.put(
-                MediaStore.Images.Media.DISPLAY_NAME, filename
+                MediaStoreImages.DISPLAY_NAME, filename
             )
             values.put(
-                MediaStore.Images.Media.MIME_TYPE, "image/jpeg"
+                MediaStoreImages.MIME_TYPE, "image/jpeg"
             )
 
             if int(BuildVersion.SDK_INT) >= 29:
                 values.put(
-                    MediaStore.Images.Media.RELATIVE_PATH,
+                    MediaStoreImages.RELATIVE_PATH,
                     "Pictures/Laiba"
                 )
 
             uri = resolver.insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                MediaStoreImages.EXTERNAL_CONTENT_URI,
                 values
             )
 
@@ -299,10 +315,9 @@ class AndroidMediaBridge:
             self.message("Microphone / speech recognition error: " + str(exc))
 
     def live_camera(self):
-        self.permissions(
-            ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"],
-            self._start_video
-        )
+        # External camera application handles its own camera/audio permissions.
+        # This application does not need to request them for VIDEO_CAPTURE.
+        self._start_video()
 
     def _start_video(self):
         try:
