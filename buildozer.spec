@@ -26,12 +26,7 @@ android.allow_backup = False
 
 # Use the stable python-for-android branch; pinning SDK/NDK blindly is avoided.
 p4a.branch = develop
-
-android.add_src = android_src
-
-android.extra_manifest_xml = src/android/extra_manifest.xml
-
-android.extra_manifest_application_arguments = src/android/extra_manifest_application_arguments.xml
+p4a.source_dir = .buildozer/android/platform/python-for-android-aab
 
 [buildozer]
 log_level = 2

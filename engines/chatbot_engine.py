@@ -30,8 +30,6 @@ class ChatbotEngine:
         self.self_updater = SelfUpdateEngine()
         self.threed_engine = ThreeDEngine()
         self.router = CommandRouter()
-        from engines.reminder_bridge import ReminderBridge
-        self.reminder_bridge = ReminderBridge()
         self.chat_history = []
         self.session = requests.Session()
 
@@ -366,18 +364,6 @@ class ChatbotEngine:
         if not text and not image_path: return "Please type or say something."
         self.interrupt_flag = False
         intent = self.router.route(text)
-        if intent == "reminder_schedule":
-            from engines.reminder_parser import parse_reminder
-            reminder, error = parse_reminder(text)
-            if error:
-                return error
-            title, message, time_ms, repeat_ms = reminder
-            result = self.reminder_bridge.schedule(
-                title, message, time_ms, repeat_ms
-            )
-            if result:
-                return "جی، یاددہانی لگا دی ہے۔ مقررہ وقت پر آپ کو اطلاع دوں گی۔"
-            return "معذرت، یاددہانی محفوظ نہیں ہو سکی۔ Android میں Laiba کی اجازتیں چیک کریں۔"
         if intent == "update_check":
             info = self.self_updater.check_for_updates()
             return "Update check: {}\nCurrent: {}\nLatest: {}\n{}".format(info["status"], info["current_version"], info.get("latest_version") or "unknown", info["changelog"])
