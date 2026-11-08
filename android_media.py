@@ -41,7 +41,7 @@ class AndroidMediaBridge:
 
             if int(BuildVersion.SDK_INT) < 29:
                 self.permissions(
-                    ["WRITE_EXTERNAL_STORAGE"],
+                    ["android.permission.WRITE_EXTERNAL_STORAGE"],
                     self._take_picture
                 )
             else:
@@ -273,7 +273,7 @@ class AndroidMediaBridge:
 
     def microphone(self):
         self.permissions(
-            ["RECORD_AUDIO"],
+            ["android.permission.RECORD_AUDIO"],
             self._start_speech
         )
 
@@ -300,7 +300,7 @@ class AndroidMediaBridge:
 
     def live_camera(self):
         self.permissions(
-            ["CAMERA", "RECORD_AUDIO"],
+            ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"],
             self._start_video
         )
 
