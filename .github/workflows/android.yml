@@ -52,6 +52,15 @@ jobs:
           echo "===== BUILD CONFIGURATION ====="
           grep -E '^(android.api|android.ndk|android.minapi|android.archs|p4a.branch)' buildozer.spec
 
+      - name: Clean Generated Android Build Files
+        run: |
+          rm -rf .buildozer/android/platform/build-arm64-v8a
+          rm -rf .buildozer/android/platform/build
+          rm -rf .buildozer/android/platform/dists
+          rm -rf .buildozer/android/app
+          rm -rf bin
+          echo "Generated Android build files cleaned."
+
       - name: Build Laiba APK
         run: |
           buildozer -v android debug
