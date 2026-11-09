@@ -1,0 +1,220 @@
+"""Laiba central brain. Uses Gemini REST so no desktop-only SDK is required."""
+import json
+import os
+import mimetypes
+import re
+import zipfile
+import time
+from pathlib import Path
+from urllib.parse import quote
+import requests
+from config import CURRENT_CONFIG, save_config
+from engines.command_router import CommandRouter
+from engines.file_modifier import FileModifierEngine
+from engines.self_update import SelfUpdateEngine
+from engines.threed_engine import ThreeDEngine
+
+
+class ChatbotEngine:
+    def __init__(self, project_root=None):
+        self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
+        self.api_keys = list(dict.fromkeys(str(k).strip() for k in CURRENT_CONFIG.get("GEMINI_API_KEYS", []) if str(k).strip()))
+        self.api_key = str(CURRENT_CONFIG.get("GEMINI_API_KEY", "")).strip()
+        if self.api_key and self.api_key not in self.api_keys:
+            self.api_keys.insert(0, self.api_key)
+        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "")
+        self.model_candidates = CURRENT_CONFIG.get("GEMINI_MODEL_CANDIDATES", [])
+        self.api_base = CURRENT_CONFIG.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
+        self.timeout = int(CURRENT_CONFIG.get("GEMINI_TIMEOUT", 30))
+        self.is_speaking = False
+        self.is_listening = False
+        self.interrupt_flag = False
+        self.file_modifier = FileModifierEngine(str(self.project_root))
+        self.self_updater = SelfUpdateEngine()
+        self.threed_engine = ThreeDEngine()
+        self.router = CommandRouter()
+        self.chat_history = []
+        self.session = requests.Session()
+
+        self.history_file = None
+        try:
+            from kivy.app import App
+            app = App.get_running_app()
+            if app and app.user_data_dir:
+                self.history_file = Path(app.user_data_dir) / "gemini_history.json"
+        except Exception:
+            self.history_file = self.project_root / "gemini_history.json"
+
+        self.load_chat_history()
+
+    def load_chat_history(self):
+        if not self.history_file:
+            return
+        try:
+            if self.history_file.is_file():
+                data = json.loads(self.history_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    self.chat_history = data[-24:]
+        except Exception as exc:
+            print("[LAIBA] History load error:", exc)
+            self.chat_history = []
+
+    def save_chat_history(self):
+        if not self.history_file:
+            return
+        try:
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
+            safe_history = []
+            for item in self.chat_history[-24:]:
+                safe_item = {"role": item.get("role"), "parts": []}
+                for part in item.get("parts", []):
+                    if "text" in part:
+                        safe_item["parts"].append({"text": part["text"]})
+                    elif "inline_data" in part:
+                        safe_item["parts"].append({
+                            "text": "[Image was attached in this conversation]"
+                        })
+                safe_history.append(safe_item)
+
+            temporary = self.history_file.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(safe_history, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            temporary.replace(self.history_file)
+        except Exception as exc:
+            print("[LAIBA] History save error:", exc)
+
+    def clear_chat_history(self):
+        self.chat_history = []
+        self.save_chat_history()
+        return "Gemini conversation history cleared."
+
+    def init_gemini(self):
+        return bool(self.api_key)
+
+    def discover_flash_models(self, key=None):
+        key = key or self.api_key
+        if not key:
+            return []
+
+        models = []
+        page_token = None
+
+        for _ in range(10):
+            params = {"key": key, "pageSize": 100}
+            if page_token:
+                params["pageToken"] = page_token
+
+            response = self._request_with_retry(
+                "GET", self.api_base.rstrip("/") + "/models",
+                params=params, timeout=self.timeout
+            )
+            if not response.ok:
+                raise requests.RequestException(
+                    "ListModels HTTP {}: {}".format(
+                        response.status_code, self._safe_error(response)
+                    )
+                )
+
+            data = response.json()
+            for item in data.get("models", []):
+                name = str(item.get("name", "")).replace("models/", "")
+                methods = item.get("supportedGenerationMethods", [])
+                lower = name.lower()
+
+                if ("flash" in lower and
+                    "generateContent" in methods and
+                    not any(x in lower for x in (
+                        "tts", "live", "transcribe", "translate",
+                        "image", "embedding"
+                    ))):
+                    models.append(name)
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+        def version_key(name):
+            return tuple(int(x) for x in re.findall(r"[0-9]+", name))
+
+        return sorted(set(models), key=version_key, reverse=True)
+
+    def set_api_key(self, key):
+        key = re.sub(r"\\s+", "", str(key or "").strip().strip('"').strip("'"))
+        if not key:
+            return "API key is empty. Nothing was changed."
+
+        old_key = self.api_key
+        old_model = self.model_name
+        old_candidates = self.model_candidates
+        old_config = dict(CURRENT_CONFIG)
+
+        try:
+            candidates = self.discover_flash_models(key)
+            if not candidates:
+                return "No accessible Flash model supporting generateContent was found."
+
+            self.api_key = key
+            self.model_candidates = candidates
+            self.model_name = ""
+
+            self.api_keys = list(dict.fromkeys([key] + self.api_keys))
+            CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
+            CURRENT_CONFIG["GEMINI_API_KEY"] = key
+            CURRENT_CONFIG["GEMINI_MODEL"] = ""
+            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = candidates
+
+            if not save_config(CURRENT_CONFIG):
+                CURRENT_CONFIG.clear()
+                CURRENT_CONFIG.update(old_config)
+                self.api_key = old_key
+                self.model_name = old_model
+                self.model_candidates = old_candidates
+                return "Settings could not be saved. Previous settings restored."
+
+            return "API key saved. Automatic Flash selection enabled. Found {} compatible models.".format(len(candidates))
+
+        except Exception as exc:
+            self.api_key = old_key
+            self.model_name = old_model
+            self.model_candidates = old_candidates
+            return "Gemini model discovery failed: {}".format(str(exc)[:400])
+
+    def test_api_connection(self):
+        if not self.api_key:
+            return {"ok": False, "message": "Gemini API key is not configured."}
+        try:
+            candidates = self.discover_flash_models()
+            if not candidates:
+                return {"ok": False, "message": "No compatible Flash models found."}
+            self.model_candidates = candidates
+            return {
+                "ok": True,
+                "message": "Gemini connected. {} compatible Flash models discovered.".format(len(candidates))
+            }
+        except Exception as exc:
+            return {"ok": False, "message": "Gemini discovery failed: {}".format(str(exc)[:300])}
+
+    @staticmethod
+    def _safe_error(response):
+        try:
+            data = response.json()
+            return str(data.get("error", {}).get("message", "Request failed"))[:500]
+        except Exception:
+            return "Request failed"
+
+    def trigger_interrupt(self):
+        self.interrupt_flag = True
+        self.is_speaking = False
+        return "Laiba response interruption requested. Speech playback must be stopped by the active audio service."
+
+    def create_whatsapp_zip(self, output_path=None):
+        export_dir = self.project_root / "exports"
+        export_dir.mkdir(exist_ok=True)
+        destination = Path(output_path).resolve() if output_path else export_dir / "Laiba_Project_Export.zip"
+        if self.project_root == destination or self.project_root in destination.parents:
+            if destination.exists(): destination.unlink()
+        ignored_dirs = {".git", "__pycache__", ".pytest_cache", ".buildozer", "bin", "venv", ".venv", "env", "exports", ".laiba_backups"}
+        ignored_names = {"laiba_config.json", ".env", "secrets.json"}
+        ignored_suffixes = {".pyc", ".pyo", ".pyd", ".apk", ".aab", ".keystore"}

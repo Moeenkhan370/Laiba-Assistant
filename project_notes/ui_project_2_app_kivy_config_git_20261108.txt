@@ -1,0 +1,1025 @@
+============================================================
+LAIBA UI PROJECT 2
+APP_KIVY + CONFIG + GIT STATUS
+DATE: 2026-11-08
+============================================================
+
+PROJECT PATH:
+/root/LaibaBackup/laiba-project
+
+============================================================
+SECTION 1: APP_KIVY.PY COMPLETE SOURCE
+============================================================
+
+"""
+Laiba Project - Kivy / Termux Buildozer APK Compatibility Application
+
+Allows compiling Laiba project into an Android APK using Buildozer in Termux.
+Includes a Kivy UI, lightweight mesh preview, and Gemini text/image request engine.
+Voice/camera services require separate Android bridges.
+"""
+
+import os
+import sys
+import config as app_config
+
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.button import Button
+from kivy.uix.scrollview import ScrollView
+from kivy.graphics import Color, Rectangle, Line
+from kivy.core.window import Window
+
+# Set Window dark background
+Window.clearcolor = (0, 0, 0, 1)
+
+from threading import Thread
+from kivy.clock import Clock
+from kivy.metrics import dp
+from kivy.uix.widget import Widget
+from kivy.graphics import RoundedRectangle
+
+from config import CURRENT_CONFIG
+from engines.chatbot_engine import ChatbotEngine
+from engines.threed_engine import ThreeDEngine
+from android_media import AndroidMediaBridge
+
+
+class ChatBubble(BoxLayout):
+    def __init__(self, message, sender="Laiba", **kwargs):
+        super().__init__(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=(dp(13), dp(9)),
+            spacing=dp(4),
+            **kwargs
+        )
+
+        self.size_hint_x = 0.86
+        self.bind(minimum_height=self.setter("height"))
+
+        is_user = sender == "You"
+        bg = (0.0, 0.38, 0.42, 1) if is_user else (0.075, 0.12, 0.20, 1)
+        fg = (0.75, 1, 1, 1) if is_user else (0.94, 0.97, 1, 1)
+
+        with self.canvas.before:
+            Color(*bg)
+            self.panel = RoundedRectangle(
+                pos=self.pos,
+                size=self.size,
+                radius=[dp(15)]
+            )
+
+        self.bind(pos=self._update_panel, size=self._update_panel)
+
+        label = Label(
+            text=message,
+            color=fg,
+            halign="left",
+            valign="middle",
+            font_size="15sp",
+            size_hint_y=None,
+            text_size=(Window.width * 0.70, None)
+        )
+
+        label.bind(
+            texture_size=lambda obj, size:
+            setattr(obj, "height", size[1] + dp(8))
+        )
+
+        self.add_widget(label)
+
+    def _update_panel(self, *args):
+        self.panel.pos = self.pos
+        self.panel.size = self.size
+
+
+class ThreeDCanvasWidget(BoxLayout):
+    def __init__(self, threed_engine, **kwargs):
+        super().__init__(**kwargs)
+        self.threed_engine = threed_engine
+        self.bind(size=self.update_canvas, pos=self.update_canvas)
+
+    def update_canvas(self, *args):
+        self.canvas.before.clear()
+
+        with self.canvas.before:
+            Color(0.025, 0.045, 0.075, 1)
+            Rectangle(pos=self.pos, size=self.size)
+
+            Color(0, 0.85, 1, 1)
+            Line(
+                rectangle=(
+                    self.x,
+                    self.y,
+                    self.width,
+                    self.height
+                ),
+                width=1
+            )
+
+        self.canvas.clear()
+
+        with self.canvas:
+            Color(0, 0.9, 1, 0.9)
+
+            scale = min(self.width, self.height) * 0.65
+
+            segments = self.threed_engine.get_projected_wireframe(
+                scale=scale,
+                center_x=self.width / 2,
+                center_y=self.height / 2
+            )
+
+            for start, end in segments:
+                Line(
+                    points=[
+                        self.x + start[0],
+                        self.y + start[1],
+                        self.x + end[0],
+                        self.y + end[1]
+                    ],
+                    width=1.5
+                )
+
+
+class LaibaKivyApp(App):
+
+    def build(self):
+        app_config.CONFIG_FILE = os.path.join(
+            self.user_data_dir,
+            "laiba_config.json"
+        )
+
+        self.history_file = os.path.join(
+            self.user_data_dir,
+            "laiba_chat_history.json"
+        )
+
+        saved_config = app_config.load_config()
+
+        CURRENT_CONFIG.clear()
+        CURRENT_CONFIG.update(saved_config)
+
+        self.title = CURRENT_CONFIG.get(
+            "APP_NAME",
+            "Laiba Assistant"
+        )
+
+        self.chatbot = ChatbotEngine()
+        self.media_bridge = AndroidMediaBridge(self)
+        self.threed_engine = ThreeDEngine()
+        self.chat_history = self.load_history()
+
+        if self.chatbot.api_key:
+            return self.build_main_screen()
+
+        return self.build_setup_screen()
+
+    def load_history(self):
+        try:
+            import json
+
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            return data if isinstance(data, list) else []
+
+        except Exception:
+            return []
+
+    def save_history(self):
+        import json
+
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    self.chat_history[-150:],
+                    f,
+                    ensure_ascii=False,
+                    indent=2
+                )
+
+        except Exception as exc:
+            print("[LAIBA] Chat history save error:", exc)
+
+    def build_setup_screen(self):
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(24),
+            spacing=dp(16)
+        )
+
+        root.canvas.before.clear()
+
+        with root.canvas.before:
+            Color(0.015, 0.025, 0.055, 1)
+            root_bg = Rectangle(pos=root.pos, size=root.size)
+
+        root.bind(
+            pos=lambda obj, val: setattr(root_bg, "pos", val),
+            size=lambda obj, val: setattr(root_bg, "size", val)
+        )
+
+        root.add_widget(Label(
+            text="[b]⚡ LAIBA AI[/b]",
+            markup=True,
+            font_size="28sp",
+            color=(0, 0.9, 1, 1),
+            size_hint_y=None,
+            height=dp(85)
+        ))
+
+        root.add_widget(Label(
+            text="Connect your Gemini AI brain",
+            font_size="16sp",
+            color=(0.8, 0.9, 1, 1),
+            size_hint_y=None,
+            height=dp(45)
+        ))
+
+        self.api_key_input = TextInput(
+            hint_text="Paste Gemini API Key",
+            password=True,
+            multiline=False,
+            size_hint_y=None,
+            height=dp(54),
+            background_color=(0.06, 0.09, 0.15, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0, 0.9, 1, 1)
+        )
+
+        self.api_key_input.bind(
+            on_text_validate=self.verify_api_key
+        )
+
+        root.add_widget(self.api_key_input)
+
+        self.verify_button = Button(
+            text="CONNECT GEMINI",
+            size_hint_y=None,
+            height=dp(54),
+            background_normal="",
+            background_color=(0, 0.65, 0.75, 1),
+            color=(1, 1, 1, 1)
+        )
+
+        self.verify_button.bind(
+            on_release=self.verify_api_key
+        )
+
+        root.add_widget(self.verify_button)
+
+        self.setup_status = Label(
+            text="Your API key stays in this app's private storage.",
+            color=(0.65, 0.8, 0.9, 1),
+            halign="center"
+        )
+
+        root.add_widget(self.setup_status)
+
+        return root
+
+    def verify_api_key(self, instance):
+        key = self.api_key_input.text.strip()
+
+        if not key:
+            self.setup_status.text = "Please enter your Gemini API key."
+            return
+
+        self.verify_button.disabled = True
+        self.setup_status.text = "Connecting to Gemini..."
+
+        def worker():
+            old_key = self.chatbot.api_key
+            ok = False
+            message = "Connection failed."
+
+            try:
+                self.chatbot.api_key = key
+
+                result = self.chatbot.test_api_connection()
+
+                ok = bool(result.get("ok"))
+                message = str(result.get("message", message))
+
+                if ok:
+                    save_result = self.chatbot.set_api_key(key)
+
+                    if not save_result.lower().startswith("api key saved"):
+                        ok = False
+                        message = save_result
+
+            except Exception as exc:
+                message = str(exc)
+
+            finally:
+                if not ok:
+                    self.chatbot.api_key = old_key
+
+                message = message.replace(key, "[HIDDEN]")
+
+                Clock.schedule_once(
+                    lambda dt: self.finish_verification(ok, message),
+                    0
+                )
+
+        Thread(target=worker, daemon=True).start()
+
+    def finish_verification(self, ok, message):
+        if not ok:
+            self.verify_button.disabled = False
+            self.setup_status.text = "Connection failed: " + message
+            return
+
+        screen = self.build_main_screen()
+
+        self.root.clear_widgets()
+        self.root.add_widget(screen)
+
+    def build_main_screen(self):
+        self.title = "Laiba Assistant"
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(10),
+            spacing=dp(8)
+        )
+
+        with root.canvas.before:
+            Color(0.012, 0.022, 0.05, 1)
+            bg = Rectangle(pos=root.pos, size=root.size)
+
+        root.bind(
+            pos=lambda obj, val: setattr(bg, "pos", val),
+            size=lambda obj, val: setattr(bg, "size", val)
+        )
+
+        header = BoxLayout(
+            size_hint_y=None,
+            height=dp(48),
+            spacing=dp(6)
+        )
+
+        header.add_widget(Label(
+            text="[b]⚡ LAIBA AI[/b]",
+            markup=True,
+            color=(0, 0.9, 1, 1),
+            font_size="20sp",
+            halign="left"
+        ))
+
+        self.network_label = Label(
+            text="● Checking...",
+            color=(1, 0.8, 0.25, 1),
+            size_hint_x=None,
+            width=dp(115),
+            font_size="12sp"
+        )
+
+        header.add_widget(self.network_label)
+
+        zip_button = Button(
+            text="ZIP",
+            size_hint_x=None,
+            width=dp(58),
+            background_normal="",
+            background_color=(0.02, 0.38, 0.48, 1)
+        )
+
+        zip_button.bind(on_release=self.export_zip)
+        header.add_widget(zip_button)
+
+        root.add_widget(header)
+
+        self.three_d_widget = ThreeDCanvasWidget(
+            self.threed_engine,
+            size_hint_y=0.23
+        )
+
+        root.add_widget(self.three_d_widget)
+
+        controls = BoxLayout(
+            size_hint_y=None,
+            height=dp(38),
+            spacing=dp(6)
+        )
+
+        for label, callback in [
+            ("Rotate X", lambda x: self.rotate_mesh(15, 0, 0)),
+            ("Rotate Y", lambda x: self.rotate_mesh(0, 15, 0)),
+            ("Cube / Pyramid", self.toggle_shape)
+        ]:
+
+            button = Button(
+                text=label,
+                background_normal="",
+                background_color=(0.06, 0.13, 0.21, 1),
+                color=(0.5, 0.95, 1, 1),
+                font_size="12sp"
+            )
+
+            button.bind(on_release=callback)
+            controls.add_widget(button)
+
+        root.add_widget(controls)
+
+        self.chat_scroll = ScrollView(
+            size_hint=(1, 1),
+            do_scroll_x=False,
+            bar_width=dp(3)
+        )
+
+        self.message_list = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(10),
+            padding=(dp(3), dp(8))
+        )
+
+        self.message_list.bind(
+            minimum_height=self.message_list.setter("height")
+        )
+
+        self.chat_scroll.add_widget(self.message_list)
+        root.add_widget(self.chat_scroll)
+
+        if self.chat_history:
+            for item in self.chat_history[-60:]:
+                self.add_bubble(
+                    item.get("text", ""),
+                    item.get("sender", "Laiba"),
+                    save=False
+                )
+        else:
+            self.add_bubble(
+                "Assalam-o-Alaikum! Main Laiba hoon. Aap mujh se Urdu, Roman Urdu ya English mein baat kar sakte hain.",
+                "Laiba"
+            )
+
+        input_row = BoxLayout(
+            size_hint_y=None,
+            height=dp(52),
+            spacing=dp(7)
+        )
+
+        # Camera, Gallery, Live Camera and Microphone buttons
+
+        media_buttons = [
+            ("📷", self.open_camera, "Camera"),
+            ("🖼️", self.open_gallery, "Gallery"),
+            ("🎥", self.open_live_camera, "Live Camera"),
+            ("🎙️", self.open_microphone, "Microphone"),
+        ]
+
+        for icon_text, callback, tooltip_text in media_buttons:
+            media_button = Button(
+                text=icon_text,
+                size_hint_x=None,
+                width=dp(43),
+                background_normal="",
+                background_color=(0.02, 0.25, 0.34, 1),
+                color=(0.3, 0.95, 1, 1),
+                font_size="18sp"
+            )
+
+            media_button.bind(on_release=callback)
+            input_row.add_widget(media_button)
+
+        self.user_input = TextInput(
+            hint_text="Message Laiba...",
+            multiline=False,
+            background_color=(0.055, 0.085, 0.14, 1),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0, 0.9, 1, 1),
+            hint_text_color=(0.5, 0.65, 0.75, 1),
+            padding=(dp(12), dp(13))
+        )
+
+        self.user_input.bind(
+            on_text_validate=self.send_message
+        )
+
+        send_button = Button(
+            text="➤",
+            size_hint_x=None,
+            width=dp(58),
+            background_normal="",
+            background_color=(0, 0.68, 0.78, 1),
+            color=(0, 0.04, 0.08, 1),
+            font_size="22sp"
+        )
+
+        send_button.bind(on_release=self.send_message)
+
+        input_row.add_widget(self.user_input)
+        input_row.add_widget(send_button)
+
+        root.add_widget(input_row)
+
+        Clock.schedule_once(
+            lambda dt: self.check_network(),
+            0.5
+        )
+
+        Clock.schedule_interval(
+            lambda dt: self.check_network(),
+            30
+        )
+
+        return root
+
+    def add_bubble(self, message, sender="Laiba", save=True):
+        message = str(message)
+
+        row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            spacing=dp(4)
+        )
+
+        bubble = ChatBubble(message, sender=sender)
+
+        bubble.bind(
+            minimum_height=row.setter("height")
+        )
+
+        if sender == "You":
+            row.add_widget(Widget())
+            row.add_widget(bubble)
+        else:
+            row.add_widget(bubble)
+            row.add_widget(Widget())
+
+        self.message_list.add_widget(row)
+
+        Clock.schedule_once(
+            lambda dt: setattr(self.chat_scroll, "scroll_y", 0),
+            0.1
+        )
+
+        if save:
+            self.chat_history.append({
+                "sender": sender,
+                "text": message
+            })
+
+            self.save_history()
+
+    def check_network(self):
+        if getattr(self, "_network_check_running", False):
+            return
+
+        self._network_check_running = True
+
+        def worker():
+            online = False
+
+            try:
+                import requests
+
+                response = requests.get(
+                    "https://www.google.com/generate_204",
+                    timeout=(3, 6),
+                    headers={"Cache-Control": "no-cache"}
+                )
+
+                online = 200 <= response.status_code < 400
+                response.close()
+
+            except Exception:
+                online = False
+
+            finally:
+                self._network_check_running = False
+
+                Clock.schedule_once(
+                    lambda dt: self.update_network_status(online),
+                    0
+                )
+
+        Thread(target=worker, daemon=True).start()
+
+    def update_network_status(self, online):
+        if not hasattr(self, "network_label"):
+            return
+
+        if online:
+            self.network_label.text = "● Online"
+            self.network_label.color = (0.2, 1, 0.65, 1)
+        else:
+            self.network_label.text = "● Offline"
+            self.network_label.color = (1, 0.35, 0.35, 1)
+
+    def rotate_mesh(self, dx, dy, dz):
+        self.threed_engine.rotate(dx, dy, dz)
+        self.three_d_widget.update_canvas()
+
+    def toggle_shape(self, instance):
+        if self.threed_engine.active_shape == "cube":
+            self.threed_engine.load_pyramid()
+        else:
+            self.threed_engine.load_cube()
+
+        self.three_d_widget.update_canvas()
+
+    def open_camera(self, *args):
+        self.media_bridge.camera()
+
+    def open_gallery(self, *args):
+        self.media_bridge.gallery()
+
+    def open_live_camera(self, *args):
+        self.media_bridge.live_camera()
+
+    def open_microphone(self, *args):
+        self.media_bridge.microphone()
+
+    def send_message(self, *args):
+        text = self.user_input.text.strip()
+
+        if not text:
+            return
+
+        self.user_input.text = ""
+
+        self.add_bubble(text, "You")
+
+        thinking = Label(
+            text="Laiba is thinking...",
+            color=(0, 0.85, 1, 1),
+            size_hint_y=None,
+            height=dp(32)
+        )
+
+        self.message_list.add_widget(thinking)
+
+        def worker():
+            try:
+                result = self.chatbot.process_message(text)
+
+            except Exception as exc:
+                result = "Network or AI error: " + str(exc)
+
+            Clock.schedule_once(
+                lambda dt: self.finish_reply(result, thinking),
+                0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def finish_reply(self, result, thinking):
+        if thinking.parent:
+            thinking.parent.remove_widget(thinking)
+
+        self.add_bubble(str(result), "Laiba")
+
+    def export_zip(self, instance):
+        try:
+            result = self.chatbot.export_project_zip()
+            message = result.get("message", result)
+
+        except Exception as exc:
+            message = "ZIP export error: " + str(exc)
+
+        self.add_bubble(str(message), "Laiba")
+
+
+if __name__ == "__main__":
+    LaibaKivyApp().run()
+
+
+============================================================
+SECTION 2: CONFIG.PY COMPLETE SOURCE
+============================================================
+
+"""
+Laiba Project - Configuration & System Registry
+
+Handles platform permissions, API key integration, UI Pure Black theme,
+3D engine parameters, and WhatsApp zip packaging export paths.
+"""
+
+import os
+import json
+import sys
+
+
+# Default Pure Black Theme and System Configuration
+
+DEFAULT_CONFIG = {
+    "APP_NAME": "Laiba Assistant",
+    "VERSION": "1.0.0",
+    "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
+    "GEMINI_MODEL": "",
+    "GEMINI_MODEL_CANDIDATES": [],
+    "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta",
+    "GEMINI_TIMEOUT": 30,
+    "UPDATE_SERVER_URL": "",
+    # Configure a real JSON manifest URL before enabling update checks.
+    "AUTO_UPDATE_CHECK": True,
+
+    # Pure Black UI Theme Palette (#000000 as explicitly required)
+
+    "UI_THEME": {
+        "BG_COLOR": "#000000",
+        "SURFACE_COLOR": "#0D0D0D",
+        "ACCENT_COLOR": "#00E5FF",
+        "ACCENT_SECONDARY": "#7C4DFF",
+        "TEXT_PRIMARY": "#FFFFFF",
+        "TEXT_SECONDARY": "#A0A0A0",
+        "BORDER_COLOR": "#1F1F1F",
+        "SUCCESS_COLOR": "#00E676",
+        "DANGER_COLOR": "#FF5252"
+    },
+
+    # 3D Engine Configuration
+
+    "THREE_D_ENGINE": {
+        "DEFAULT_MODEL": "Laiba_Core_Cube",
+        "SUPPORTED_FORMATS": [
+            ".obj",
+            ".stl",
+            ".gltf",
+            ".ply"
+        ],
+        "AUTO_ROTATE": True,
+        "ROTATION_SPEED": 2.0,
+        "WIREFRAME_COLOR": "#00E5FF",
+        "CANVAS_SIZE": [240, 200]
+    },
+
+    # WhatsApp Zip Packaging & Distribution
+
+    "WHATSAPP_EXPORT": {
+        "EXPORT_DIR": "exports",
+        "ZIP_FILENAME": "Laiba_Project_WhatsApp.zip",
+        "TARGET_PHONE": "",
+        "DEFAULT_MESSAGE": "Here is the Laiba Project source code package ready for Termux Buildozer APK compilation!"
+    },
+
+    # Buildozer Termux APK Deployment Profiles
+
+    "BUILDOZER_CONFIG": {
+        "TITLE": "Laiba AI Assistant",
+        "PACKAGE_NAME": "laibaassistant",
+        "PACKAGE_DOMAIN": "com.moeen",
+        "SOURCE_INCLUDE_EXTS": "py,png,jpg,kv,atlas,json,spec,txt",
+        "ANDROID_PERMISSIONS": "INTERNET,ACCESS_NETWORK_STATE"
+    },
+
+    # Hardware & System Permissions
+
+    "PERMISSIONS": {
+        "MICROPHONE": False,
+        "CAMERA": False,
+        "ACCESSIBILITY": False,
+        "STORAGE": False,
+        "SYSTEM_MODIFICATION": False
+    },
+
+    "APP_SHORTCUTS": {
+        "browser": "https://google.com",
+        "youtube": "https://youtube.com",
+        "calculator": "calc",
+        "notepad": "notepad"
+    }
+}
+
+
+CONFIG_FILE = "laiba_config.json"
+
+
+def load_config():
+    """Loads configuration with persistent custom overrides."""
+
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+
+            merged = {**DEFAULT_CONFIG}
+
+            for k, v in saved.items():
+                if (
+                    isinstance(v, dict)
+                    and k in merged
+                    and isinstance(merged[k], dict)
+                ):
+                    merged[k] = {**merged[k], **v}
+                else:
+                    merged[k] = v
+
+            return merged
+
+        except Exception as e:
+            print(
+                f"[Config] Error loading config file, "
+                f"fallback to default: {e}"
+            )
+
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(cfg):
+    """Saves updated runtime configuration to disk."""
+
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+
+        return True
+
+    except Exception as e:
+        print(f"[Config] Error saving config: {e}")
+        return False
+
+
+# Global runtime state
+
+CURRENT_CONFIG = load_config()
+
+
+============================================================
+SECTION 3: COMPLETE GIT STATUS OUTPUT
+============================================================
+
+COMMAND:
+git status --short
+
+CURRENT BRANCH:
+main
+
+OUTPUT:
+
+?? .github/workflows/android.yml.backup
+?? .github/workflows/android.yml.backup_cleanbuild
+?? android_media.py.backup_20261108_030124
+?? android_media.py.before_full_resolution_camera_20261108_031342
+?? android_media.py.before_native_camera_20261108_030817
+?? android_media.py.before_native_gallery_20261108_030245
+?? android_media.py.before_permission_fix_20261108_072032
+?? app_kivy.py.backup_20261107_210854
+?? app_kivy.py.backup_20261107_231802
+?? app_kivy.py.backup_20261108_001801
+?? app_kivy.py.before_android_media_fix
+?? app_kivy.py.before_api_upgrade
+?? app_kivy.py.before_full_ui_upgrade_20261107_235115.bak
+?? app_kivy.py.before_media_bridge_full
+?? app_kivy.py.before_media_buttons_20261108_010754
+?? app_kivy.py.before_ui_redesign_20261107_233054.bak
+?? backups/
+?? buildozer.spec.before_media_bridge_full
+?? buildozer.spec.before_splash
+?? buildozer.spec.logo-backup
+?? config.py.before_api_upgrade
+?? engines/chatbot_engine.py.backup_20261107_231802
+?? engines/chatbot_engine.py.backup_20261108_002135
+?? engines/chatbot_engine.py.backup_20261108_002610
+?? engines/chatbot_engine.py.backup_20261108_002738
+?? engines/chatbot_engine.py.backup_before_reminder_integration
+?? engines/chatbot_engine.py.before_api_upgrade
+?? engines/command_router.py.backup_before_reminder_integration
+?? engines/reminder_bridge.py.backup_20261108_101756
+?? gemini_history.json
+?? laiba_config.json
+?? project_notes/
+
+
+============================================================
+SECTION 4: APP_KIVY.PY INSPECTION RESULTS
+============================================================
+
+1. Current application is built using Kivy.
+2. Main application class is LaibaKivyApp.
+3. Chat interface uses ChatBubble.
+4. ThreeDCanvasWidget displays the projected 3D wireframe.
+5. ChatbotEngine handles Gemini messages.
+6. AndroidMediaBridge handles camera, gallery, live camera
+   and microphone requests.
+7. Gemini API key setup screen is present.
+8. API connection is tested in a background thread.
+9. Chat history is stored in JSON.
+10. Chat history is limited to the latest 150 saved messages.
+11. Main screen displays the latest 60 chat history messages.
+12. Network status is checked periodically.
+13. Project ZIP export button is present.
+14. Cube/Pyramid and Rotate X/Rotate Y controls are present.
+15. Current UI uses dark backgrounds and cyan highlights.
+16. Selected Mockup #2 Glassmorphism design is not yet
+    implemented in this source.
+
+============================================================
+SECTION 5: CONFIG.PY INSPECTION RESULTS
+============================================================
+
+1. APP_NAME: Laiba Assistant
+2. VERSION: 1.0.0
+3. GEMINI_MODEL: Empty by default.
+4. GEMINI_MODEL_CANDIDATES: Empty list.
+5. GEMINI_API_BASE: Google Generative Language API v1beta.
+6. GEMINI_TIMEOUT: 30 seconds.
+7. UPDATE_SERVER_URL: Empty.
+8. AUTO_UPDATE_CHECK: True.
+9. UI_THEME: Pure Black theme.
+10. Accent primary: Cyan (#00E5FF).
+11. Accent secondary: Purple (#7C4DFF).
+12. 3D engine configuration is present.
+13. WhatsApp ZIP export configuration is present.
+14. Buildozer configuration is present.
+15. Microphone permission setting: False.
+16. Camera permission setting: False.
+17. Accessibility permission setting: False.
+18. Storage permission setting: False.
+19. System modification permission setting: False.
+20. Browser, YouTube, Calculator and Notepad shortcuts exist.
+
+============================================================
+SECTION 6: GIT INSPECTION RESULTS
+============================================================
+
+Current branch: main
+
+The supplied Git status output lists untracked backup files,
+backup directories, project configuration/history files,
+and project_notes/.
+
+No tracked-file modifications were shown in the supplied
+git status --short output.
+
+Existing backups must be preserved during future UI work.
+
+============================================================
+SECTION 7: UI PROJECT 2 DESIGN REQUIREMENTS
+============================================================
+
+PRIMARY DESIGN REFERENCE:
+
+The CENTER PHONE MOCKUP labelled NUMBER 2 in the user's
+original three-design reference image.
+
+Required visual direction:
+
+- Dark teal-to-blue gradient.
+- Glassmorphism interface.
+- Prominent glowing blue circular AI orb.
+- Modern premium AI assistant appearance.
+- Clean and polished mobile layout.
+- Consistent colors, spacing and typography.
+- Responsive Android screen design.
+
+Do not substitute the selected Mockup #2 with another
+design option.
+
+============================================================
+SECTION 8: MASTER IMPLEMENTATION PLAN REQUIREMENTS
+============================================================
+
+The next phase must prepare one coordinated implementation
+plan covering:
+
+1. Complete UI redesign according to Mockup #2.
+2. Preserve all existing working features.
+3. Camera integration.
+4. Gallery integration.
+5. Live camera integration.
+6. Microphone integration.
+7. Chat interface redesign.
+8. Voice assistant interface.
+9. Animated glowing AI orb.
+10. 3D engine integration.
+11. Gemini API integration.
+12. Existing configuration compatibility.
+13. Existing chat history compatibility.
+14. Android permission handling.
+15. Reminder and other existing integrations.
+16. Required source file dependency mapping.
+17. Backup before modifications.
+18. Rollback strategy.
+19. Syntax and import checks.
+20. Buildozer APK compatibility checks.
+
+============================================================
+SECTION 9: IMPORTANT IMPLEMENTATION INSTRUCTIONS
+============================================================
+
+- Do not modify source files during the inspection phase.
+- Do not delete existing backups.
+- Do not replace working features with placeholders.
+- Inspect dependencies before changing interfaces.
+- Avoid unnecessary package installations.
+- Preserve the current project and original backups.
+- Finish the implementation plan before editing.
+- Apply agreed changes in one coordinated master batch
+  wherever practical.
+- Verify all modified files before APK compilation.
+- Do not claim a feature is functional until it has been
+  tested on the target Android device.
+
+============================================================
+END OF UI PROJECT 2 RECORD
+============================================================
+

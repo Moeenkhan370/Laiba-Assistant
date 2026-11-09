@@ -11,3 +11,19 @@ exports/
 .laiba_backups/
 *.tar.gz
 *.zip
+
+# Local backup files
+*.bak
+*.backup
+*.backup_*
+*.before_*
+*.primary.bak
+backups/
+
+# Local configuration and conversation history
+laiba_config.json
+gemini_history.json
+
+# Temporary build and diagnostic files
+*.log
+reports/
