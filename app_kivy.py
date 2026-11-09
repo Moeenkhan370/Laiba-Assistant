@@ -15,7 +15,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
-from kivy.graphics import Color, Rectangle, Line
+from kivy.graphics import Color, Rectangle, Line, Ellipse
 from kivy.core.window import Window
 
 from config import CURRENT_CONFIG
@@ -107,6 +107,44 @@ class ThreeDCanvasWidget(BoxLayout):
                     width=1.5
                 )
 
+
+
+class VoiceOrbWidget(Widget):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.phase = 0.0
+        self.state = "ready"
+        self.bind(pos=self.draw_orb, size=self.draw_orb)
+        self.anim_event = Clock.schedule_interval(self.animate, 1 / 30)
+
+    def animate(self, dt):
+        self.phase += dt * 2.2
+        self.draw_orb()
+
+    def set_state(self, state):
+        self.state = state
+        self.draw_orb()
+
+    def draw_orb(self, *args):
+        self.canvas.clear()
+        cx, cy = self.center
+        radius = min(self.width, self.height) * 0.23
+        pulse = 1.0 + 0.07 * __import__("math").sin(self.phase * 2)
+        if self.state == "speaking":
+            pulse += 0.08 * abs(__import__("math").sin(self.phase * 3))
+        with self.canvas:
+            for scale, alpha in ((2.0, 0.10), (1.65, 0.17), (1.3, 0.25)):
+                Color(0.0, 0.55, 1.0, alpha)
+                Ellipse(pos=(cx-radius*scale*pulse,
+                             cy-radius*scale*pulse),
+                        size=(radius*2*scale*pulse,
+                              radius*2*scale*pulse))
+            Color(0.05, 0.55, 1.0, 0.95)
+            Ellipse(pos=(cx-radius*pulse, cy-radius*pulse),
+                    size=(radius*2*pulse, radius*2*pulse))
+            Color(0.30, 0.85, 1.0, 0.95)
+            Ellipse(pos=(cx-radius*0.65, cy-radius*0.65),
+                    size=(radius*1.3, radius*1.3))
 
 class LaibaKivyApp(App):
     def build(self):
@@ -293,6 +331,19 @@ class LaibaKivyApp(App):
         header.add_widget(keys_button)
         root.add_widget(header)
 
+        voice_button = Button(
+            text="✦  OPEN VOICE MODE",
+            size_hint_y=None,
+            height=dp(48),
+            font_size="15sp",
+            bold=True,
+            background_normal="",
+            background_color=(0.015, 0.30, 0.48, 1),
+            color=(0.35, 0.88, 1, 1)
+        )
+        voice_button.bind(on_release=self.open_voice_mode)
+        root.add_widget(voice_button)
+
         orb_panel = BoxLayout(orientation="vertical", size_hint_y=None,
                               height=dp(145), padding=dp(8), spacing=dp(2))
         with orb_panel.canvas.before:
@@ -466,6 +517,138 @@ class LaibaKivyApp(App):
             self.threed_engine.load_cube()
         self.three_d_widget.update_canvas()
 
+    def open_voice_mode(self, *args):
+        self.voice_active = False
+        self.voice_muted = False
+        screen = BoxLayout(
+            orientation="vertical",
+            padding=dp(22),
+            spacing=dp(12)
+        )
+        with screen.canvas.before:
+            Color(0.008, 0.018, 0.055, 1)
+            bg = Rectangle(pos=screen.pos, size=screen.size)
+        screen.bind(
+            pos=lambda o, v: setattr(bg, "pos", v),
+            size=lambda o, v: setattr(bg, "size", v)
+        )
+
+        back = Button(
+            text="‹  BACK",
+            size_hint_y=None,
+            height=dp(48),
+            background_normal="",
+            background_color=(0.04, 0.12, 0.22, 1)
+        )
+        back.bind(on_release=self.close_voice_mode)
+        screen.add_widget(back)
+
+        screen.add_widget(Label(
+            text="[b]LAIBA AI[/b]",
+            markup=True,
+            font_size="25sp",
+            color=(0.65, 0.92, 1, 1),
+            size_hint_y=None,
+            height=dp(48)
+        ))
+
+        self.voice_status = Label(
+            text="Ready to talk",
+            font_size="16sp",
+            color=(0.45, 0.85, 1, 1),
+            size_hint_y=None,
+            height=dp(38)
+        )
+        screen.add_widget(self.voice_status)
+
+        self.voice_orb = VoiceOrbWidget()
+        screen.add_widget(self.voice_orb)
+
+        self.voice_hint = Label(
+            text="Tap Start Conversation",
+            font_size="14sp",
+            color=(0.65, 0.78, 0.9, 1),
+            size_hint_y=None,
+            height=dp(35)
+        )
+        screen.add_widget(self.voice_hint)
+
+        controls = BoxLayout(
+            size_hint_y=None,
+            height=dp(65),
+            spacing=dp(12)
+        )
+        self.voice_start_button = Button(
+            text="▶  START",
+            background_normal="",
+            background_color=(0.0, 0.48, 0.78, 1)
+        )
+        self.voice_start_button.bind(on_release=self.start_voice_call)
+        controls.add_widget(self.voice_start_button)
+
+        self.voice_mic_button = Button(
+            text="MIC ON",
+            background_normal="",
+            background_color=(0.04, 0.30, 0.40, 1),
+            disabled=True
+        )
+        self.voice_mic_button.bind(on_release=self.toggle_voice_mic)
+        controls.add_widget(self.voice_mic_button)
+
+        end_button = Button(
+            text="■  END CALL",
+            background_normal="",
+            background_color=(0.75, 0.08, 0.15, 1)
+        )
+        end_button.bind(on_release=self.end_voice_call)
+        controls.add_widget(end_button)
+
+        screen.add_widget(controls)
+        self.voice_screen = screen
+        self.root.clear_widgets()
+        self.root.add_widget(screen)
+
+    def start_voice_call(self, *args):
+        if self.voice_active:
+            return
+        self.voice_active = True
+        self.voice_muted = False
+        self.voice_status.text = "Listening..."
+        self.voice_hint.text = "I'm listening. Speak in Urdu or English."
+        self.voice_orb.set_state("listening")
+        self.voice_start_button.disabled = True
+        self.voice_mic_button.disabled = False
+        self.voice_mic_button.text = "MIC ON"
+        self.media_bridge.microphone()
+
+    def toggle_voice_mic(self, *args):
+        if not self.voice_active:
+            return
+        if self.voice_muted:
+            self.voice_muted = False
+            self.voice_mic_button.text = "MIC ON"
+            self.voice_status.text = "Listening..."
+            self.voice_orb.set_state("listening")
+            self.media_bridge.microphone()
+        else:
+            self.voice_muted = True
+            self.voice_mic_button.text = "MIC OFF"
+            self.voice_status.text = "Microphone muted"
+            self.voice_orb.set_state("ready")
+            self.media_bridge.stop_listening()
+
+    def end_voice_call(self, *args):
+        self.voice_active = False
+        self.media_bridge.stop_listening()
+        self.media_bridge.stop_speaking()
+        self.close_voice_mode()
+
+    def close_voice_mode(self, *args):
+        self.voice_active = False
+        self.media_bridge.stop_listening()
+        self.root.clear_widgets()
+        self.root.add_widget(self.build_main_screen())
+
     def open_camera(self, *args):
         self.media_bridge.camera()
 
@@ -504,15 +687,31 @@ class LaibaKivyApp(App):
 
         Thread(target=worker, daemon=True).start()
 
+    def on_tts_state(self, state):
+        if not getattr(self, "voice_active", False):
+            return
+
+        if state == "speaking":
+            self.voice_status.text = "Laiba is speaking..."
+            self.voice_orb.set_state("speaking")
+            self.voice_hint.text = "You can interrupt Laiba by speaking."
+
+        elif state in ("done", "error"):
+            if not self.voice_muted:
+                self.voice_status.text = "Listening..."
+                self.voice_orb.set_state("listening")
+                self.voice_hint.text = "I'm listening. Speak now."
+                Clock.schedule_once(
+                    lambda dt: self.media_bridge._restart_listening()
+                    if self.voice_active and not self.voice_muted else None,
+                    0.4
+                )
+
     def finish_reply(self, result, thinking):
         if thinking.parent:
             thinking.parent.remove_widget(thinking)
         self.add_bubble(str(result), "Laiba")
         self.media_bridge.speak(str(result))
-        if self.media_bridge.continuous_listening:
-            Clock.schedule_once(
-                lambda dt: self.media_bridge._restart_listening(), 1
-            )
 
 
     def open_api_keys(self, *args):

@@ -51,15 +51,49 @@ class AndroidMediaBridge:
                     except Exception as exc:
                         print("LAIBA_TTS_INIT:", exc)
 
+            class ProgressListener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/speech/tts/UtteranceProgressListener"
+                ]
+                __javacontext__ = "app"
+
+                def __init__(self, bridge):
+                    super().__init__()
+                    self.bridge = bridge
+
+                @java_method("(Ljava/lang/String;)V")
+                def onStart(self, utterance_id):
+                    Clock.schedule_once(
+                        lambda dt: self.bridge._tts_state("speaking"), 0
+                    )
+
+                @java_method("(Ljava/lang/String;)V")
+                def onDone(self, utterance_id):
+                    Clock.schedule_once(
+                        lambda dt: self.bridge._tts_state("done"), 0
+                    )
+
+                @java_method("(Ljava/lang/String;)V")
+                def onError(self, utterance_id):
+                    Clock.schedule_once(
+                        lambda dt: self.bridge._tts_state("error"), 0
+                    )
+
+            self.tts_progress_listener = ProgressListener(self)
+
             Activity = autoclass("org.kivy.android.PythonActivity")
             self.tts_listener = Listener(self)
             self.tts = autoclass(
                 "android.speech.tts.TextToSpeech"
             )(Activity.mActivity, self.tts_listener)
+            self.tts.setOnUtteranceProgressListener(
+                self.tts_progress_listener
+            )
         except Exception as exc:
             print("LAIBA_NATIVE_TTS_ERROR:", exc)
 
     def stop_speaking(self):
+        self.is_speaking = False
         try:
             if self.tts:
                 self.tts.stop()
@@ -67,15 +101,38 @@ class AndroidMediaBridge:
             print("LAIBA_TTS_STOP:", exc)
 
     def speak(self, text):
-        from jnius import autoclass
         try:
-            if self.tts and self.tts_ready:
-                TTS = autoclass("android.speech.tts.TextToSpeech")
-                self.tts.speak(
-                    str(text), TTS.QUEUE_FLUSH, None
+            from jnius import autoclass
+            self.is_speaking = True
+
+            if not self.tts or not self.tts_ready:
+                print("LAIBA_TTS_NOT_READY")
+                Clock.schedule_once(
+                    lambda dt: self._tts_state("error"), 0
                 )
+                return
+
+            TTS = autoclass("android.speech.tts.TextToSpeech")
+            result = self.tts.speak(
+                str(text), TTS.QUEUE_FLUSH, None, "laiba_reply"
+            )
+
+            if result == TTS.ERROR:
+                Clock.schedule_once(
+                    lambda dt: self._tts_state("error"), 0
+                )
+
         except Exception as exc:
             print("LAIBA_TTS_SPEAK_ERROR:", exc)
+            Clock.schedule_once(
+                lambda dt: self._tts_state("error"), 0
+            )
+
+    def _tts_state(self, state):
+        self.is_speaking = (state == "speaking")
+        callback = getattr(self.app, "on_tts_state", None)
+        if callback:
+            callback(state)
 
     def message(self, text):
         Clock.schedule_once(
@@ -429,9 +486,11 @@ class AndroidMediaBridge:
                             SpeechRecognizer.RESULTS_RECOGNITION
                         )
                         if items and items.size() > 0:
-                            Clock.schedule_once(
-                                lambda dt: self.bridge.stop_speaking(), 0
-                            )
+                            spoken = str(items.get(0)).strip()
+                            if spoken and self.bridge.is_speaking:
+                                Clock.schedule_once(
+                                    lambda dt: self.bridge.stop_speaking(), 0
+                                )
                     except Exception as exc:
                         print("LAIBA_PARTIAL_VOICE:", exc)
 
@@ -460,6 +519,10 @@ class AndroidMediaBridge:
     def _restart_listening(self):
         if not self.continuous_listening or not self.speech_recognizer:
             return
+
+        if getattr(self, "is_speaking", False):
+            return
+
         try:
             from jnius import autoclass
             Intent = autoclass("android.content.Intent")
@@ -481,9 +544,6 @@ class AndroidMediaBridge:
         if not self.continuous_listening:
             return
         self._send_spoken(spoken)
-        Clock.schedule_once(
-            lambda dt: self._restart_listening(), 0.7
-        )
 
     def stop_listening(self):
         self.continuous_listening = False
