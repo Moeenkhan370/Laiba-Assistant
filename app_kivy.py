@@ -13,6 +13,7 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
+from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle, Line
 from kivy.core.window import Window
@@ -125,6 +126,10 @@ class LaibaKivyApp(App):
         self.media_bridge = AndroidMediaBridge(self)
         self.threed_engine = ThreeDEngine()
         self.chat_history = self.load_history()
+
+        if not self.chatbot.api_key and self.chatbot.api_keys:
+            self.chatbot.api_key = self.chatbot.api_keys[0]
+            CURRENT_CONFIG["GEMINI_API_KEY"] = self.chatbot.api_key
 
         if self.chatbot.api_key:
             return self.build_main_screen()
@@ -255,163 +260,136 @@ class LaibaKivyApp(App):
         self.root.add_widget(screen)
 
     def build_main_screen(self):
-        self.title = "Laiba Assistant"
-        root = BoxLayout(
-            orientation="vertical",
-            padding=dp(10),
-            spacing=dp(8)
-        )
+        self.title = "Laiba AI Assistant"
+        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(9))
 
         with root.canvas.before:
-            Color(0.012, 0.022, 0.05, 1)
+            Color(0.008, 0.018, 0.045, 1)
             bg = Rectangle(pos=root.pos, size=root.size)
-        root.bind(
-            pos=lambda obj, val: setattr(bg, "pos", val),
-            size=lambda obj, val: setattr(bg, "size", val)
-        )
+        root.bind(pos=lambda o,v: setattr(bg,"pos",v),
+                  size=lambda o,v: setattr(bg,"size",v))
 
-        header = BoxLayout(
-            size_hint_y=None,
-            height=dp(48),
-            spacing=dp(6)
-        )
+        header = BoxLayout(size_hint_y=None, height=dp(55), spacing=dp(8))
         header.add_widget(Label(
-            text="[b]⚡ LAIBA AI[/b]",
-            markup=True,
-            color=(0, 0.9, 1, 1),
-            font_size="20sp",
-            halign="left"
-        ))
-
+            text="[b]LAIBA[/b] [color=00DFFF]AI[/color]",
+            markup=True, font_size="23sp", halign="left",
+            color=(0.85,0.96,1,1)))
         self.network_label = Label(
-            text="● Checking...",
-            color=(1, 0.8, 0.25, 1),
-            size_hint_x=None,
-            width=dp(115),
-            font_size="12sp"
-        )
+            text="● Checking...", size_hint_x=None, width=dp(105),
+            font_size="11sp", color=(1,0.8,0.25,1))
         header.add_widget(self.network_label)
 
-        zip_button = Button(
-            text="ZIP",
-            size_hint_x=None,
-            width=dp(58),
-            background_normal="",
-            background_color=(0.02, 0.38, 0.48, 1)
-        )
+        zip_button = Button(text="ZIP", size_hint_x=None, width=dp(55),
+            background_normal="", background_color=(0.02,0.35,0.48,1))
         zip_button.bind(on_release=self.export_zip)
         header.add_widget(zip_button)
+
+        keys_button = Button(
+            text="API KEYS", size_hint_x=None, width=dp(78),
+            font_size="10sp", background_normal="",
+            background_color=(0.35, 0.12, 0.48, 1)
+        )
+        keys_button.bind(on_release=self.open_api_keys)
+        header.add_widget(keys_button)
         root.add_widget(header)
 
+        orb_panel = BoxLayout(orientation="vertical", size_hint_y=None,
+                              height=dp(145), padding=dp(8), spacing=dp(2))
+        with orb_panel.canvas.before:
+            Color(0.025,0.075,0.13,1)
+            orb_bg = RoundedRectangle(pos=orb_panel.pos,
+                                      size=orb_panel.size, radius=[dp(22)])
+        orb_panel.bind(pos=lambda o,v:setattr(orb_bg,"pos",v),
+                       size=lambda o,v:setattr(orb_bg,"size",v))
+        orb_panel.add_widget(Label(
+            text="[color=00DFFF]◉[/color]", markup=True,
+            font_size="66sp", color=(0.1,0.8,1,1)))
+        orb_panel.add_widget(Label(
+            text="[b]LAIBA AI[/b]  •  Always ready",
+            markup=True, font_size="13sp", color=(0.7,0.9,1,1),
+            size_hint_y=None, height=dp(25)))
+        root.add_widget(orb_panel)
+
         self.three_d_widget = ThreeDCanvasWidget(
-            self.threed_engine,
-            size_hint_y=0.23
-        )
+            self.threed_engine, size_hint_y=None, height=dp(115))
         root.add_widget(self.three_d_widget)
 
-        controls = BoxLayout(
-            size_hint_y=None,
-            height=dp(38),
-            spacing=dp(6)
-        )
+        controls = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         for label, callback in [
-            ("Rotate X", lambda x: self.rotate_mesh(15, 0, 0)),
-            ("Rotate Y", lambda x: self.rotate_mesh(0, 15, 0)),
+            ("Rotate X", lambda x:self.rotate_mesh(15,0,0)),
+            ("Rotate Y", lambda x:self.rotate_mesh(0,15,0)),
             ("Cube / Pyramid", self.toggle_shape)
         ]:
-            button = Button(
-                text=label,
-                background_normal="",
-                background_color=(0.06, 0.13, 0.21, 1),
-                color=(0.5, 0.95, 1, 1),
-                font_size="12sp"
-            )
-            button.bind(on_release=callback)
-            controls.add_widget(button)
+            b = Button(text=label, font_size="11sp",
+                background_normal="", background_color=(0.035,0.16,0.25,1),
+                color=(0.35,0.9,1,1))
+            b.bind(on_release=callback)
+            controls.add_widget(b)
         root.add_widget(controls)
 
-        self.chat_scroll = ScrollView(
-            size_hint=(1, 1),
-            do_scroll_x=False,
-            bar_width=dp(3)
-        )
+        self.chat_scroll = ScrollView(do_scroll_x=False, bar_width=dp(3))
         self.message_list = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            spacing=dp(10),
-            padding=(dp(3), dp(8))
-        )
+            orientation="vertical", size_hint_y=None,
+            spacing=dp(9), padding=(dp(3),dp(8)))
         self.message_list.bind(
-            minimum_height=self.message_list.setter("height")
-        )
+            minimum_height=self.message_list.setter("height"))
         self.chat_scroll.add_widget(self.message_list)
         root.add_widget(self.chat_scroll)
 
         if self.chat_history:
             for item in self.chat_history[-60:]:
-                self.add_bubble(
-                    item.get("text", ""),
-                    item.get("sender", "Laiba"),
-                    save=False
-                )
+                self.add_bubble(item.get("text",""),
+                                item.get("sender","Laiba"), save=False)
         else:
             self.add_bubble(
-                "Assalam-o-Alaikum! Main Laiba hoon. Aap mujh se Urdu, Roman Urdu ya English mein baat kar sakte hain.",
-                "Laiba"
-            )
+                "Assalam-o-Alaikum! Main Laiba hoon. Aap mujh se Urdu, "
+                "Roman Urdu ya English mein baat kar sakte hain.", "Laiba")
 
-        input_row = BoxLayout(
-            size_hint_y=None,
-            height=dp(52),
-            spacing=dp(7)
-        )
-        # Camera, Gallery, Live Camera and Microphone buttons
-        media_buttons = [
-            ("📷", self.open_camera, "Camera"),
-            ("🖼️", self.open_gallery, "Gallery"),
-            ("🎥", self.open_live_camera, "Live Camera"),
-            ("🎙️", self.open_microphone, "Microphone"),
-        ]
-        for icon_text, callback, tooltip_text in media_buttons:
-            media_button = Button(
-                text=icon_text,
-                size_hint_x=None,
-                width=dp(43),
-                background_normal="",
-                background_color=(0.02, 0.25, 0.34, 1),
-                color=(0.3, 0.95, 1, 1),
-                font_size="18sp"
-            )
-            media_button.bind(on_release=callback)
-            input_row.add_widget(media_button)
+        input_panel = BoxLayout(orientation="vertical",
+            size_hint_y=None, height=dp(105), spacing=dp(5), padding=dp(5))
+        with input_panel.canvas.before:
+            Color(0.025,0.065,0.11,1)
+            panel_bg = RoundedRectangle(pos=input_panel.pos,
+                size=input_panel.size, radius=[dp(17)])
+        input_panel.bind(pos=lambda o,v:setattr(panel_bg,"pos",v),
+                         size=lambda o,v:setattr(panel_bg,"size",v))
 
+        media_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
+        for icon_text, callback in [
+            ("Camera",self.open_camera),
+            ("Gallery",self.open_gallery),
+            ("Live",self.open_live_camera),
+            ("Mic",self.open_microphone)
+        ]:
+            b = Button(text=icon_text, font_size="11sp",
+                background_normal="", background_color=(0.025,0.23,0.32,1),
+                color=(0.4,0.95,1,1))
+            b.bind(on_release=callback)
+            media_row.add_widget(b)
+        input_panel.add_widget(media_row)
+
+        composer = BoxLayout(size_hint_y=None, height=dp(49), spacing=dp(6))
         self.user_input = TextInput(
-            hint_text="Message Laiba...",
-            multiline=False,
-            background_color=(0.055, 0.085, 0.14, 1),
-            foreground_color=(1, 1, 1, 1),
-            cursor_color=(0, 0.9, 1, 1),
-            hint_text_color=(0.5, 0.65, 0.75, 1),
-            padding=(dp(12), dp(13))
-        )
+            hint_text="Message Laiba...", multiline=False,
+            background_normal="", background_active="",
+            background_color=(0.055,0.10,0.16,1),
+            foreground_color=(1,1,1,1), cursor_color=(0,0.9,1,1),
+            hint_text_color=(0.5,0.68,0.78,1),
+            padding=(dp(12),dp(12)))
         self.user_input.bind(on_text_validate=self.send_message)
+        composer.add_widget(self.user_input)
 
-        send_button = Button(
-            text="➤",
-            size_hint_x=None,
-            width=dp(58),
-            background_normal="",
-            background_color=(0, 0.68, 0.78, 1),
-            color=(0, 0.04, 0.08, 1),
-            font_size="22sp"
-        )
+        send_button = Button(text="➤", size_hint_x=None, width=dp(52),
+            font_size="22sp", background_normal="",
+            background_color=(0,0.65,0.82,1),
+            color=(1,1,1,1))
         send_button.bind(on_release=self.send_message)
-        input_row.add_widget(self.user_input)
-        input_row.add_widget(send_button)
-        root.add_widget(input_row)
+        composer.add_widget(send_button)
+        input_panel.add_widget(composer)
+        root.add_widget(input_panel)
 
-        Clock.schedule_once(lambda dt: self.check_network(), 0.5)
-        Clock.schedule_interval(lambda dt: self.check_network(), 30)
+        Clock.schedule_once(lambda dt:self.check_network(),0.5)
+        Clock.schedule_interval(lambda dt:self.check_network(),30)
         return root
 
     def add_bubble(self, message, sender="Laiba", save=True):
@@ -530,6 +508,215 @@ class LaibaKivyApp(App):
         if thinking.parent:
             thinking.parent.remove_widget(thinking)
         self.add_bubble(str(result), "Laiba")
+
+
+    def open_api_keys(self, *args):
+        content = BoxLayout(
+            orientation="vertical", padding=dp(12), spacing=dp(8)
+        )
+
+        content.add_widget(Label(
+            text="[b]GEMINI MULTIPLE API KEYS[/b]",
+            markup=True, size_hint_y=None, height=dp(35),
+            color=(0, 0.85, 1, 1)
+        ))
+
+        status = Label(
+            text="Keys are stored in private app configuration.",
+            size_hint_y=None, height=dp(42),
+            color=(0.7, 0.85, 1, 1)
+        )
+        content.add_widget(status)
+
+        key_input = TextInput(
+            hint_text="Enter another Gemini API Key",
+            password=True, multiline=False,
+            size_hint_y=None, height=dp(48),
+            background_color=(0.06, 0.09, 0.15, 1),
+            foreground_color=(1, 1, 1, 1)
+        )
+        content.add_widget(key_input)
+
+        add_button = Button(
+            text="ADD & VERIFY KEY",
+            size_hint_y=None, height=dp(46),
+            background_normal="",
+            background_color=(0, 0.55, 0.68, 1)
+        )
+        content.add_widget(add_button)
+
+        scroll = ScrollView(do_scroll_x=False)
+        key_list = BoxLayout(
+            orientation="vertical", size_hint_y=None,
+            spacing=dp(7), padding=dp(3)
+        )
+        key_list.bind(minimum_height=key_list.setter("height"))
+        scroll.add_widget(key_list)
+        content.add_widget(scroll)
+
+        popup = Popup(
+            title="Laiba - Gemini Key Manager",
+            content=content, size_hint=(0.94, 0.82)
+        )
+
+        self.refresh_api_key_list(key_list, status)
+        add_button.bind(on_release=lambda *_: self.add_managed_api_key(
+            key_input, status, key_list, add_button
+        ))
+        popup.open()
+
+    def refresh_api_key_list(self, container, status):
+        container.clear_widgets()
+        keys = list(dict.fromkeys(
+            getattr(self.chatbot, "api_keys", [])
+        ))
+
+        if not keys and self.chatbot.api_key:
+            keys = [self.chatbot.api_key]
+
+        if not keys:
+            container.add_widget(Label(
+                text="No Gemini API Keys configured.",
+                size_hint_y=None, height=dp(45)
+            ))
+            return
+
+        for index, key in enumerate(keys, 1):
+            row = BoxLayout(
+                size_hint_y=None, height=dp(46), spacing=dp(4)
+            )
+            masked = key[:5] + "..." + key[-4:] if len(key) > 10 else "Hidden"
+            row.add_widget(Label(
+                text="Key {}: {}".format(index, masked),
+                font_size="11sp", color=(0.85, 0.95, 1, 1)
+            ))
+
+            test_button = Button(
+                text="TEST", size_hint_x=None, width=dp(62),
+                background_normal="",
+                background_color=(0.02, 0.42, 0.32, 1)
+            )
+            test_button.bind(
+                on_release=lambda _, k=key: self.test_managed_api_key(k, status)
+            )
+            row.add_widget(test_button)
+
+            delete_button = Button(
+                text="DELETE", size_hint_x=None, width=dp(72),
+                background_normal="",
+                background_color=(0.55, 0.12, 0.16, 1)
+            )
+            delete_button.bind(
+                on_release=lambda _, k=key: self.delete_managed_api_key(
+                    k, container, status
+                )
+            )
+            row.add_widget(delete_button)
+            container.add_widget(row)
+
+    def add_managed_api_key(self, key_input, status, key_list, button):
+        key = key_input.text.strip()
+        if not key:
+            status.text = "Please enter an API key."
+            return
+
+        old_keys = list(self.chatbot.api_keys)
+        button.disabled = True
+        status.text = "Verifying Gemini API key..."
+
+        def worker():
+            try:
+                result = self.chatbot.set_api_key(key)
+                ok = str(result).startswith("API key saved")
+                message = str(result).replace(key, "[HIDDEN]")
+                if not ok:
+                    self.chatbot.api_keys = old_keys
+            except Exception as exc:
+                ok = False
+                self.chatbot.api_keys = old_keys
+                message = str(exc).replace(key, "[HIDDEN]")[:250]
+
+            Clock.schedule_once(
+                lambda dt: self.finish_managed_api_key(
+                    ok, message, key_input, status, key_list, button
+                ), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def finish_managed_api_key(
+        self, ok, message, key_input, status, key_list, button
+    ):
+        button.disabled = False
+        status.text = message
+        if ok:
+            key_input.text = ""
+            self.refresh_api_key_list(key_list, status)
+
+    def test_managed_api_key(self, key, status):
+        status.text = "Testing selected API key..."
+
+        def worker():
+            try:
+                models = self.chatbot.discover_flash_models(key)
+                ok = bool(models)
+                message = (
+                    "Key is working. {} Flash models found.".format(len(models))
+                    if ok else "No compatible Flash models found."
+                )
+            except Exception as exc:
+                ok = False
+                message = "Key test failed: " + str(exc)[:180]
+
+            Clock.schedule_once(
+                lambda dt: setattr(status, "text", message), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def delete_managed_api_key(self, key, key_list, status):
+        old_keys = list(self.chatbot.api_keys)
+        if key not in old_keys:
+            status.text = "API key not found."
+            return
+
+        new_keys = [item for item in old_keys if item != key]
+        if not new_keys:
+            status.text = "At least one API key must remain configured."
+            return
+
+        old_key = self.chatbot.api_key
+        old_model = self.chatbot.model_name
+        old_candidates = self.chatbot.model_candidates
+        old_config = dict(CURRENT_CONFIG)
+
+        new_active = new_keys[0] if old_key == key else old_key
+
+        try:
+            self.chatbot.api_keys = new_keys
+            self.chatbot.api_key = new_active
+            self.chatbot.model_name = ""
+            self.chatbot.model_candidates = []
+
+            CURRENT_CONFIG["GEMINI_API_KEYS"] = new_keys
+            CURRENT_CONFIG["GEMINI_API_KEY"] = new_active
+            CURRENT_CONFIG["GEMINI_MODEL"] = ""
+            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = []
+
+            if not app_config.save_config(CURRENT_CONFIG):
+                raise RuntimeError("Configuration save failed.")
+
+            status.text = "API key deleted successfully."
+            self.refresh_api_key_list(key_list, status)
+
+        except Exception as exc:
+            self.chatbot.api_keys = old_keys
+            self.chatbot.api_key = old_key
+            self.chatbot.model_name = old_model
+            self.chatbot.model_candidates = old_candidates
+            CURRENT_CONFIG.clear()
+            CURRENT_CONFIG.update(old_config)
+            status.text = "Delete failed: " + str(exc)[:180]
 
     def export_zip(self, instance):
         try:

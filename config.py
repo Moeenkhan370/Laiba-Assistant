@@ -13,6 +13,7 @@ DEFAULT_CONFIG = {
     "APP_NAME": "Laiba Assistant",
     "VERSION": "1.0.0",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
+    "GEMINI_API_KEYS": [],
     "GEMINI_MODEL": "",
     "GEMINI_MODEL_CANDIDATES": [],
     "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta",

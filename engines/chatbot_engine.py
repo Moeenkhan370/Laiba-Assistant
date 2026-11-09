@@ -18,7 +18,10 @@ from engines.threed_engine import ThreeDEngine
 class ChatbotEngine:
     def __init__(self, project_root=None):
         self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
+        self.api_keys = list(dict.fromkeys(str(k).strip() for k in CURRENT_CONFIG.get("GEMINI_API_KEYS", []) if str(k).strip()))
         self.api_key = str(CURRENT_CONFIG.get("GEMINI_API_KEY", "")).strip()
+        if self.api_key and self.api_key not in self.api_keys:
+            self.api_keys.insert(0, self.api_key)
         self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "")
         self.model_candidates = CURRENT_CONFIG.get("GEMINI_MODEL_CANDIDATES", [])
         self.api_base = CURRENT_CONFIG.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
@@ -138,7 +141,7 @@ class ChatbotEngine:
         return sorted(set(models), key=version_key, reverse=True)
 
     def set_api_key(self, key):
-        key = re.sub(r"\\s+", "", str(key or "").strip().strip('"').strip("'"))
+        key = re.sub(r"\s+", "", str(key or "").strip().strip('"').strip("'"))
         if not key:
             return "API key is empty. Nothing was changed."
 
@@ -156,6 +159,8 @@ class ChatbotEngine:
             self.model_candidates = candidates
             self.model_name = ""
 
+            self.api_keys = list(dict.fromkeys([key] + self.api_keys))
+            CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
             CURRENT_CONFIG["GEMINI_API_KEY"] = key
             CURRENT_CONFIG["GEMINI_MODEL"] = ""
             CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = candidates
@@ -164,6 +169,7 @@ class ChatbotEngine:
                 CURRENT_CONFIG.clear()
                 CURRENT_CONFIG.update(old_config)
                 self.api_key = old_key
+                self.api_keys = list(old_config.get("GEMINI_API_KEYS", []))
                 self.model_name = old_model
                 self.model_candidates = old_candidates
                 return "Settings could not be saved. Previous settings restored."
@@ -172,8 +178,11 @@ class ChatbotEngine:
 
         except Exception as exc:
             self.api_key = old_key
+            self.api_keys = list(old_config.get("GEMINI_API_KEYS", []))
             self.model_name = old_model
             self.model_candidates = old_candidates
+            CURRENT_CONFIG.clear()
+            CURRENT_CONFIG.update(old_config)
             return "Gemini model discovery failed: {}".format(str(exc)[:400])
 
     def test_api_connection(self):
@@ -259,8 +268,18 @@ class ChatbotEngine:
 
         raise requests.RequestException("Request failed after retries.")
 
+    def _redact_api_keys(self, message):
+        message = str(message)
+        keys = set(self.api_keys or [])
+        if self.api_key:
+            keys.add(self.api_key)
+        for key in keys:
+            if key:
+                message = message.replace(str(key), "[REDACTED]")
+        return message
+
     def _gemini(self, prompt, image_path=None):
-        if not self.api_key:
+        if not self.api_key and not self.api_keys:
             return "Gemini is not connected. Add an API key in Laiba settings."
 
         parts = [{"text": prompt}]
@@ -291,8 +310,7 @@ class ChatbotEngine:
                 candidates = self.discover_flash_models()
                 self.model_candidates = candidates
 
-            if not candidates:
-                return "No compatible Gemini Flash models are available."
+            # Each configured key will be checked for its own compatible models.
 
             history = self.chat_history[-12:]
             contents = list(history) + [{"role": "user", "parts": parts}]
@@ -308,55 +326,70 @@ class ChatbotEngine:
             }
 
             errors = []
-            for model in candidates:
-                url = "{}/models/{}:generateContent".format(
-                    self.api_base.rstrip("/"), quote(model, safe="-")
-                )
+            api_keys = self.api_keys or ([self.api_key] if self.api_key else [])
+            for api_key in api_keys:
+                key_models = candidates
                 try:
-                    response = self._request_with_retry(
-                        "POST", url, params={"key": self.api_key},
-                        json=payload, timeout=self.timeout
+                    key_models = self.discover_flash_models(api_key) or candidates
+                except Exception as exc:
+                    errors.append("API key discovery failed: " + self._redact_api_keys(exc)[:100])
+                    continue
+                for model in key_models:
+                    url = "{}/models/{}:generateContent".format(
+                        self.api_base.rstrip("/"), quote(model, safe="-")
                     )
-                    if not response.ok:
-                        errors.append("{}: HTTP {}".format(model, response.status_code))
+                    try:
+                        response = self._request_with_retry(
+                            "POST", url, params={"key": api_key},
+                            json=payload, timeout=self.timeout
+                        )
+                        if not response.ok:
+                            errors.append("{}: HTTP {}".format(model, response.status_code))
+                            continue
+
+                        data = response.json()
+                        answer = "".join(
+                            p.get("text", "")
+                            for p in data.get("candidates", [{}])[0]
+                            .get("content", {}).get("parts", [])
+                        )
+                        if not answer:
+                            errors.append("{}: empty response".format(model))
+                            continue
+
+                        self.api_key = api_key
+                        self.api_keys = [api_key] + [
+                            k for k in self.api_keys if k != api_key
+                        ]
+                        self.model_name = model
+                        self.model_candidates = key_models
+                        CURRENT_CONFIG["GEMINI_API_KEY"] = api_key
+                        CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
+                        CURRENT_CONFIG["GEMINI_MODEL"] = model
+                        CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
+                        save_config(CURRENT_CONFIG)
+
+                        self.chat_history.extend([
+                            {"role": "user", "parts": parts},
+                            {"role": "model", "parts": [{"text": answer}]}
+                        ])
+                        self.chat_history = self.chat_history[-24:]
+                        self.save_chat_history()
+                        print("[LAIBA] Active Gemini model:", model)
+                        return answer
+
+                    except requests.RequestException as exc:
+                        errors.append("{}: {}".format(model, self._redact_api_keys(exc)[:120]))
+                        continue
+                    except (ValueError, KeyError, IndexError) as exc:
+                        errors.append("{}: invalid response".format(model))
                         continue
 
-                    data = response.json()
-                    answer = "".join(
-                        p.get("text", "")
-                        for p in data.get("candidates", [{}])[0]
-                        .get("content", {}).get("parts", [])
-                    )
-                    if not answer:
-                        errors.append("{}: empty response".format(model))
-                        continue
-
-                    self.model_name = model
-                    CURRENT_CONFIG["GEMINI_MODEL"] = ""
-                    CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = self.model_candidates
-                    save_config(CURRENT_CONFIG)
-
-                    self.chat_history.extend([
-                        {"role": "user", "parts": parts},
-                        {"role": "model", "parts": [{"text": answer}]}
-                    ])
-                    self.chat_history = self.chat_history[-24:]
-                    self.save_chat_history()
-                    print("[LAIBA] Active Gemini model:", model)
-                    return answer
-
-                except requests.RequestException as exc:
-                    errors.append("{}: {}".format(model, str(exc)[:120]))
-                    continue
-                except (ValueError, KeyError, IndexError) as exc:
-                    errors.append("{}: invalid response".format(model))
-                    continue
-
-            return "All discovered Gemini Flash models failed. " + "; ".join(errors[:8])
+            return "All Gemini API keys and Flash models failed. " + "; ".join(errors[:8])
 
         except requests.RequestException as exc:
             return "Gemini network/discovery error: {}".format(
-                str(exc).replace(self.api_key, "[REDACTED]")
+                self._redact_api_keys(exc)
             )
 
     def process_message(self, user_text, image_path=None):
