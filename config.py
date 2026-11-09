@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "GEMINI_MODEL": "",
     "GEMINI_MODEL_CANDIDATES": [],
     "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta",
-    "GEMINI_TIMEOUT": 30,
+    "GEMINI_TIMEOUT": 15,
     "UPDATE_SERVER_URL": "",  # Configure a real JSON manifest URL before enabling update checks.
     "AUTO_UPDATE_CHECK": True,
     

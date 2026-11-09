@@ -157,7 +157,7 @@ class ChatbotEngine:
 
             self.api_key = key
             self.model_candidates = candidates
-            self.model_name = ""
+            self.model_name = "gemini-3-flash-preview"
 
             self.api_keys = list(dict.fromkeys([key] + self.api_keys))
             CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
@@ -327,13 +327,9 @@ class ChatbotEngine:
 
             errors = []
             api_keys = self.api_keys or ([self.api_key] if self.api_key else [])
+            primary_model = "gemini-3-flash-preview"
             for api_key in api_keys:
-                key_models = candidates
-                try:
-                    key_models = self.discover_flash_models(api_key) or candidates
-                except Exception as exc:
-                    errors.append("API key discovery failed: " + self._redact_api_keys(exc)[:100])
-                    continue
+                key_models = [primary_model]
                 for model in key_models:
                     url = "{}/models/{}:generateContent".format(
                         self.api_base.rstrip("/"), quote(model, safe="-")
