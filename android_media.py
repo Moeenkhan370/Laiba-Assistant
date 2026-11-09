@@ -20,6 +20,9 @@ class AndroidMediaBridge:
         self.camera_output_uri = None
         self.tts = None
         self.tts_ready = False
+        self.speech_recognizer = None
+        self.continuous_listening = False
+        self.recognition_listener = None
         self.init_native_tts()
 
     def init_native_tts(self):
@@ -56,7 +59,15 @@ class AndroidMediaBridge:
         except Exception as exc:
             print("LAIBA_NATIVE_TTS_ERROR:", exc)
 
+    def stop_speaking(self):
+        try:
+            if self.tts:
+                self.tts.stop()
+        except Exception as exc:
+            print("LAIBA_TTS_STOP:", exc)
+
     def speak(self, text):
+        from jnius import autoclass
         try:
             if self.tts and self.tts_ready:
                 TTS = autoclass("android.speech.tts.TextToSpeech")
@@ -346,24 +357,143 @@ class AndroidMediaBridge:
 
     def _start_speech(self):
         try:
-            self._bind_activity()
-            from jnius import autoclass
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            Intent = autoclass("android.content.Intent")
-            RecognizerIntent = autoclass("android.speech.RecognizerIntent")
+            from jnius import autoclass, PythonJavaClass, java_method
 
+            class Listener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/speech/RecognitionListener"
+                ]
+                __javacontext__ = "app"
+
+                def __init__(self, bridge):
+                    super().__init__()
+                    self.bridge = bridge
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onReadyForSpeech(self, params):
+                    pass
+
+                @java_method("()V")
+                def onBeginningOfSpeech(self):
+                    Clock.schedule_once(
+                        lambda dt: self.bridge.stop_speaking(), 0
+                    )
+
+                @java_method("(F)V")
+                def onRmsChanged(self, value):
+                    pass
+
+                @java_method("([B)V")
+                def onBufferReceived(self, buffer):
+                    pass
+
+                @java_method("()V")
+                def onEndOfSpeech(self):
+                    pass
+
+                @java_method("(I)V")
+                def onError(self, error):
+                    if self.bridge.continuous_listening:
+                        Clock.schedule_once(
+                            lambda dt: self.bridge._restart_listening(), 1
+                        )
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onResults(self, results):
+                    try:
+                        SpeechRecognizer = autoclass(
+                            "android.speech.SpeechRecognizer"
+                        )
+                        items = results.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
+                        if items and items.size() > 0:
+                            spoken = str(items.get(0))
+                            Clock.schedule_once(
+                                lambda dt: self.bridge._handle_voice(spoken), 0
+                            )
+                        else:
+                            Clock.schedule_once(
+                                lambda dt: self.bridge._restart_listening(), 0.5
+                            )
+                    except Exception as exc:
+                        print("LAIBA_VOICE_RESULT:", exc)
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onPartialResults(self, results):
+                    try:
+                        SpeechRecognizer = autoclass(
+                            "android.speech.SpeechRecognizer"
+                        )
+                        items = results.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
+                        if items and items.size() > 0:
+                            Clock.schedule_once(
+                                lambda dt: self.bridge.stop_speaking(), 0
+                            )
+                    except Exception as exc:
+                        print("LAIBA_PARTIAL_VOICE:", exc)
+
+                @java_method("(ILandroid/os/Bundle;)V")
+                def onEvent(self, event, params):
+                    pass
+
+            Activity = autoclass("org.kivy.android.PythonActivity")
+            SpeechRecognizer = autoclass(
+                "android.speech.SpeechRecognizer"
+            )
+            self.continuous_listening = True
+            self.recognition_listener = Listener(self)
+            self.speech_recognizer = (
+                SpeechRecognizer.createSpeechRecognizer(Activity.mActivity)
+            )
+            self.speech_recognizer.setRecognitionListener(
+                self.recognition_listener
+            )
+            self._restart_listening()
+
+        except Exception as exc:
+            self.continuous_listening = False
+            self.message("Continuous voice error: " + str(exc))
+
+    def _restart_listening(self):
+        if not self.continuous_listening or not self.speech_recognizer:
+            return
+        try:
+            from jnius import autoclass
+            Intent = autoclass("android.content.Intent")
+            RecognizerIntent = autoclass(
+                "android.speech.RecognizerIntent"
+            )
             intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             intent.putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
-            intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Laiba is listening...")
-            PythonActivity.mActivity.startActivityForResult(
-                intent, self.SPEECH_CODE
-            )
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, True)
+            self.speech_recognizer.startListening(intent)
         except Exception as exc:
-            self.message("Microphone / speech recognition error: " + str(exc))
+            print("LAIBA_LISTEN_RESTART:", exc)
+
+    def _handle_voice(self, spoken):
+        if not self.continuous_listening:
+            return
+        self._send_spoken(spoken)
+        Clock.schedule_once(
+            lambda dt: self._restart_listening(), 0.7
+        )
+
+    def stop_listening(self):
+        self.continuous_listening = False
+        try:
+            if self.speech_recognizer:
+                self.speech_recognizer.stopListening()
+                self.speech_recognizer.destroy()
+                self.speech_recognizer = None
+        except Exception as exc:
+            print("LAIBA_LISTEN_STOP:", exc)
 
     def live_camera(self):
         # External camera application handles its own camera/audio permissions.
