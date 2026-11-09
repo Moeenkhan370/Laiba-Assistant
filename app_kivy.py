@@ -508,6 +508,7 @@ class LaibaKivyApp(App):
         if thinking.parent:
             thinking.parent.remove_widget(thinking)
         self.add_bubble(str(result), "Laiba")
+        self.media_bridge.speak(str(result))
 
 
     def open_api_keys(self, *args):

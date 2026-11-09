@@ -6,6 +6,10 @@ from kivy.metrics import dp
 from kivy.uix.label import Label
 
 
+class _TTSInitListener:
+    pass
+
+
 class AndroidMediaBridge:
     SPEECH_CODE = 7312
     VIDEO_CODE = 7313
@@ -14,6 +18,53 @@ class AndroidMediaBridge:
         self.app = app
         self.activity_bound = False
         self.camera_output_uri = None
+        self.tts = None
+        self.tts_ready = False
+        self.init_native_tts()
+
+    def init_native_tts(self):
+        try:
+            from jnius import autoclass, PythonJavaClass, java_method
+            class Listener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/speech/tts/TextToSpeech$OnInitListener"
+                ]
+                __javacontext__ = "app"
+                def __init__(self, bridge):
+                    super().__init__()
+                    self.bridge = bridge
+                @java_method("(I)V")
+                def onInit(self, status):
+                    try:
+                        TTS = autoclass("android.speech.tts.TextToSpeech")
+                        if status == TTS.SUCCESS:
+                            Locale = autoclass("java.util.Locale")
+                            result = self.bridge.tts.setLanguage(
+                                Locale("ur", "PK")
+                            )
+                            self.bridge.tts_ready = (
+                                result >= TTS.LANG_AVAILABLE
+                            )
+                    except Exception as exc:
+                        print("LAIBA_TTS_INIT:", exc)
+
+            Activity = autoclass("org.kivy.android.PythonActivity")
+            self.tts_listener = Listener(self)
+            self.tts = autoclass(
+                "android.speech.tts.TextToSpeech"
+            )(Activity.mActivity, self.tts_listener)
+        except Exception as exc:
+            print("LAIBA_NATIVE_TTS_ERROR:", exc)
+
+    def speak(self, text):
+        try:
+            if self.tts and self.tts_ready:
+                TTS = autoclass("android.speech.tts.TextToSpeech")
+                self.tts.speak(
+                    str(text), TTS.QUEUE_FLUSH, None
+                )
+        except Exception as exc:
+            print("LAIBA_TTS_SPEAK_ERROR:", exc)
 
     def message(self, text):
         Clock.schedule_once(
