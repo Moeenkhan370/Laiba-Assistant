@@ -470,5 +470,52 @@ class AndroidMediaBridge:
                         3: "AUDIO", 4: "SERVER",
                         5: "CLIENT", 6: "SPEECH_TIMEOUT",
                         7: "NO_MATCH", 8: "RECOGNIZER_BUSY",
-                        9: "INSUFFICIENT_PERMISSIONS",
-                        10
+                        9: "INSUFFICIENT_PERMISSIONS"
+                    }
+                    print("LAIBA_SPEECH_ERROR:", error, names.get(error, "UNKNOWN"))
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onResults(self, results):
+                    self.bridge.recognition_active = False
+                    try:
+                        ArrayList = autoclass("java.util.ArrayList")
+                        SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+                        matches = results.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
+                        if matches and matches.size() > 0:
+                            text = str(matches.get(0))
+                            print("LAIBA_SPEECH_RESULT:", text)
+                            Clock.schedule_once(
+                                lambda dt: self.app.send_voice_transcript(text), 0
+                            )
+                    except Exception as exc:
+                        print("LAIBA_SPEECH_RESULTS_ERROR:", exc)
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onPartialResults(self, partialResults):
+                    pass
+
+                @java_method(
+                    "(ILjava/lang/String;Landroid/os/Bundle;)V"
+                )
+                def onEvent(self, eventType, params):
+                    pass
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+            Intent = autoclass("android.content.Intent")
+            RecognizerIntent = autoclass("android.speech.RecognizerIntent")
+
+            activity = PythonActivity.mActivity
+            if self.speech_recognizer is None:
+                self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
+
+            if self.recognition_listener is None:
+                self.recognition_listener = Listener(self)
+
+            self.speech_recognizer.setRecognitionListener(self.recognition_listener)
+
+            intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            intent.putExtra(
+                RecognizerIntent.EXTRA
