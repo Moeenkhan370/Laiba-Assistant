@@ -392,3 +392,177 @@ class AndroidMediaBridge:
             height=dp(32)
         )
         self.app.message_list.add_widget(thinking)
+
+        def worker():
+            try:
+                result = self.app.chatbot.process_message(
+                    "Please analyze this image and describe what you see.",
+                    image_path=path
+                )
+            except Exception as exc:
+                result = "Image analysis error: " + str(exc)
+
+            Clock.schedule_once(
+                lambda dt: self.app.finish_reply(result, thinking), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _bind_activity(self):
+        if self.activity_bound:
+            return
+        from android import activity
+        activity.bind(on_activity_result=self._activity_result)
+        self.activity_bound = True
+
+    def microphone(self):
+        print("LAIBA_MIC_BUTTON: pressed", flush=True)
+        self.permissions(
+            ["android.permission.RECORD_AUDIO"],
+            self._start_speech
+        )
+
+    def _start_speech(self):
+        Clock.schedule_once(lambda dt: self._init_and_listen_ui_thread(), 0)
+
+    def _init_and_listen_ui_thread(self):
+        try:
+            from jnius import autoclass, PythonJavaClass, java_method
+
+            class Listener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/speech/RecognitionListener"
+                ]
+                __javacontext__ = "app"
+
+                def __init__(self, bridge):
+                    super().__init__()
+                    self.bridge = bridge
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onReadyForSpeech(self, params):
+                    print("LAIBA_SPEECH: ready for speech", flush=True)
+
+                @java_method("()V")
+                def onBeginningOfSpeech(self):
+                    print("LAIBA_SPEECH: speech detected", flush=True)
+                    Clock.schedule_once(
+                        lambda dt: self.bridge.stop_speaking(), 0
+                    )
+
+                @java_method("(F)V")
+                def onRmsChanged(self, value):
+                    pass
+
+                @java_method("([B)V")
+                def onBufferReceived(self, buffer):
+                    pass
+
+                @java_method("()V")
+                def onEndOfSpeech(self):
+                    pass
+
+                @java_method("(I)V")
+                def onError(self, error):
+                    self.bridge.recognition_active = False
+                    names = {
+                        1: "NETWORK_TIMEOUT", 2: "NETWORK",
+                        3: "AUDIO", 4: "SERVER",
+                        5: "CLIENT", 6: "SPEECH_TIMEOUT",
+                        7: "NO_MATCH", 8: "RECOGNIZER_BUSY",
+                        9: "INSUFFICIENT_PERMISSIONS"
+                    }
+                    print("LAIBA_SPEECH_ERROR:", error, names.get(error, "UNKNOWN"))
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onResults(self, results):
+                    self.bridge.recognition_active = False
+                    try:
+                        SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+                        matches = results.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
+                        if matches and matches.size() > 0:
+                            text = str(matches.get(0))
+                            print("LAIBA_SPEECH_RESULT:", text)
+                            Clock.schedule_once(
+                                lambda dt: self.app.send_voice_transcript(text), 0
+                            )
+                    except Exception as exc:
+                        print("LAIBA_SPEECH_RESULTS_ERROR:", exc)
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onPartialResults(self, partialResults):
+                    pass
+
+                @java_method("(ILjava/lang/String;Landroid/os/Bundle;)V")
+                def onEvent(self, eventType, params):
+                    pass
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+            Intent = autoclass("android.content.Intent")
+            RecognizerIntent = autoclass("android.speech.RecognizerIntent")
+
+            activity = PythonActivity.mActivity
+            if self.speech_recognizer is None:
+                self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
+
+            if self.recognition_listener is None:
+                self.recognition_listener = Listener(self)
+
+            self.speech_recognizer.setRecognitionListener(self.recognition_listener)
+
+            intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+
+            if not self.recognition_active:
+                self.recognition_active = True
+                self.speech_recognizer.startListening(intent)
+                print("LAIBA_SPEECH: started listening", flush=True)
+
+        except Exception as exc:
+            self.recognition_active = False
+            print("LAIBA_SPEECH_INIT_ERROR:", exc)
+
+    def stop_listening(self):
+        try:
+            self.recognition_active = False
+            if self.speech_recognizer:
+                self.speech_recognizer.stopListening()
+        except Exception as exc:
+            print("LAIBA_SPEECH_STOP:", exc)
+
+    def _restart_listening(self):
+        if not self.recognition_active:
+            self._start_speech()
+
+    def live_camera(self):
+        self.message("Live camera stream mode is ready.")
+
+    def _activity_result(self, requestCode, resultCode, intent):
+        try:
+            from jnius import autoclass
+            Activity = autoclass("android.app.Activity")
+
+            if requestCode == self.GALLERY_CODE:
+                if resultCode == Activity.RESULT_OK and intent is not None:
+                    uri = intent.getData()
+                    if uri:
+                        self._copy_gallery_uri(uri)
+                else:
+                    self.message("Gallery selection cancelled.")
+
+            elif requestCode == self.CAMERA_CODE:
+                if resultCode == Activity.RESULT_OK:
+                    if self.camera_output_uri:
+                        self._copy_gallery_uri(self.camera_output_uri)
+                else:
+                    self.message("Camera capture cancelled.")
+        except Exception as exc:
+            print("LAIBA_ACTIVITY_RESULT_ERROR:", exc)
