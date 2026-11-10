@@ -165,4 +165,230 @@ class AndroidMediaBridge:
                         )
                 except Exception as exc:
                     self.message(
-                        "Permission callback error: " + str(
+                        "Permission callback error: " + str(exc)
+                    )
+            print("LAIBA_MIC_PERMISSION: requesting", names, flush=True)
+            request_permissions(names, result)
+        except Exception as exc:
+            print("LAIBA_PERMISSION_EXCEPTION:", repr(exc), flush=True)
+            self.message("Android permission error: " + str(exc))
+
+    CAMERA_CODE = 7315
+
+    def camera(self):
+        try:
+            from jnius import autoclass
+            BuildVersion = autoclass("android.os.Build$VERSION")
+
+            if int(BuildVersion.SDK_INT) < 29:
+                self.permissions(
+                    ["android.permission.WRITE_EXTERNAL_STORAGE"],
+                    self._take_picture
+                )
+            else:
+                self._take_picture()
+        except Exception as exc:
+            self.message("Camera permission error: " + str(exc))
+
+    def _take_picture(self):
+        try:
+            self._bind_activity()
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+            Intent = autoclass("android.content.Intent")
+            ContentValues = autoclass("android.content.ContentValues")
+            MediaStore = autoclass("android.provider.MediaStore")
+            MediaStoreImages = autoclass(
+                "android.provider.MediaStore$Images$Media"
+            )
+            BuildVersion = autoclass("android.os.Build$VERSION")
+
+            activity = PythonActivity.mActivity
+            resolver = activity.getContentResolver()
+
+            values = ContentValues()
+            filename = (
+                "Laiba_" + str(__import__("time").time_ns()) + ".jpg"
+            )
+            values.put(
+                MediaStoreImages.DISPLAY_NAME, filename
+            )
+            values.put(
+                MediaStoreImages.MIME_TYPE, "image/jpeg"
+            )
+
+            if int(BuildVersion.SDK_INT) >= 29:
+                values.put(
+                    MediaStoreImages.RELATIVE_PATH,
+                    "Pictures/Laiba"
+                )
+
+            uri = resolver.insert(
+                MediaStoreImages.EXTERNAL_CONTENT_URI,
+                values
+            )
+
+            if uri is None:
+                raise RuntimeError("Could not create camera image destination.")
+
+            intent = Intent("android.media.action.IMAGE_CAPTURE")
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            intent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+
+            if not intent.resolveActivity(activity.getPackageManager()):
+                resolver.delete(uri, None, None)
+                raise RuntimeError("No camera application is available.")
+
+            self.camera_output_uri = uri
+            activity.startActivityForResult(intent, self.CAMERA_CODE)
+
+        except Exception as exc:
+            self.camera_output_uri = None
+            self.message("Camera error: " + str(exc))
+
+    GALLERY_CODE = 7314
+
+    def gallery(self):
+        try:
+            self._bind_activity()
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Intent = autoclass("android.content.Intent")
+
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("image/*")
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+            PythonActivity.mActivity.startActivityForResult(
+                intent, self.GALLERY_CODE
+            )
+        except Exception as exc:
+            self.message("Gallery error: " + str(exc))
+
+    def _save_camera_bitmap(self, bitmap):
+        try:
+            from jnius import autoclass
+
+            Bitmap = autoclass("android.graphics.Bitmap")
+            CompressFormat = autoclass(
+                "android.graphics.Bitmap$CompressFormat"
+            )
+            ByteArrayOutputStream = autoclass(
+                "java.io.ByteArrayOutputStream"
+            )
+
+            stream = ByteArrayOutputStream()
+            bitmap.compress(CompressFormat.JPEG, 95, stream)
+            data = bytes(stream.toByteArray())
+            stream.close()
+
+            if not data:
+                raise ValueError("Camera image is empty.")
+            if len(data) > 20 * 1024 * 1024:
+                raise ValueError("Camera image exceeds 20 MB.")
+
+            os.makedirs(self.app.user_data_dir, exist_ok=True)
+            path = os.path.join(
+                self.app.user_data_dir,
+                "laiba_camera_" + str(__import__("time").time_ns()) + ".jpg"
+            )
+            with open(path, "wb") as output:
+                output.write(data)
+
+            self.send_image(path)
+
+        except Exception as exc:
+            self.message("Could not save camera image: " + str(exc))
+
+    def _copy_gallery_uri(self, uri):
+        try:
+            from jnius import autoclass, jarray
+
+            activity = autoclass(
+                "org.kivy.android.PythonActivity"
+            ).mActivity
+
+            resolver = activity.getContentResolver()
+            mime = str(resolver.getType(uri) or "").lower()
+
+            extensions = {
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/webp": ".webp"
+            }
+
+            if mime not in extensions:
+                self.message("Unsupported image format: " + mime)
+                return
+
+            os.makedirs(self.app.user_data_dir, exist_ok=True)
+            path = os.path.join(
+                self.app.user_data_dir,
+                "laiba_gallery_" + str(__import__("time").time_ns())
+                + extensions[mime]
+            )
+
+            stream = resolver.openInputStream(uri)
+            if stream is None:
+                self.message("Could not open selected image.")
+                return
+
+            buffer = jarray("b")(65536)
+            total = 0
+
+            try:
+                with open(path, "wb") as output:
+                    while True:
+                        count = int(stream.read(buffer))
+                        if count < 0:
+                            break
+                        if count == 0:
+                            continue
+
+                        total += count
+                        if total > 20 * 1024 * 1024:
+                            raise ValueError("Image exceeds 20 MB limit.")
+
+                        output.write(bytes(
+                            (int(buffer[i]) & 255 for i in range(count))
+                        ))
+            finally:
+                stream.close()
+
+            if total == 0:
+                raise ValueError("Selected image is empty.")
+
+            self.send_image(path)
+
+        except Exception as exc:
+            self.message("Gallery image error: " + str(exc))
+
+    def _gallery_done(self, selection):
+        if selection:
+            path = str(selection[0])
+            if path.startswith("file://"):
+                path = path[7:]
+            self.send_image(path)
+        else:
+            self.message("No image selected.")
+
+    def send_image(self, path):
+        if not os.path.isfile(path):
+            self.message("Image path is not accessible: " + path)
+            return
+
+        self.app.add_bubble("[Image attached]", "You")
+        thinking = Label(
+            text="Laiba is analyzing the image...",
+            color=(0, 0.85, 1, 1),
+            size_hint_y=None,
+            height=dp(32)
+        )
+        self.app.message_list.add_widget(thinking)
