@@ -1,4 +1,3 @@
-
 import os
 from threading import Thread
 from kivy.clock import Clock
@@ -47,6 +46,10 @@ class AndroidMediaBridge:
                             result = self.bridge.tts.setLanguage(
                                 Locale("ur", "PK")
                             )
+                            if result < TTS.LANG_AVAILABLE:
+                                result = self.bridge.tts.setLanguage(
+                                    Locale("en", "US")
+                                )
                             self.bridge.tts_ready = (
                                 result >= TTS.LANG_AVAILABLE
                             )
@@ -420,6 +423,9 @@ class AndroidMediaBridge:
         )
 
     def _start_speech(self):
+        Clock.schedule_once(lambda dt: self._init_and_listen_ui_thread(), 0)
+
+    def _init_and_listen_ui_thread(self):
         try:
             from jnius import autoclass, PythonJavaClass, java_method
 
@@ -465,224 +471,4 @@ class AndroidMediaBridge:
                         5: "CLIENT", 6: "SPEECH_TIMEOUT",
                         7: "NO_MATCH", 8: "RECOGNIZER_BUSY",
                         9: "INSUFFICIENT_PERMISSIONS",
-                        10: "TOO_MANY_REQUESTS", 11: "SERVER_DISCONNECTED",
-                        12: "LANGUAGE_NOT_SUPPORTED",
-                        13: "LANGUAGE_UNAVAILABLE"
-                    }
-                    detail = names.get(int(error), "UNKNOWN")
-                    print("LAIBA_SPEECH_ERROR:", int(error), detail, flush=True)
-                    self.bridge.message(
-                        "Speech recognition error: " + detail
-                    )
-                    if self.bridge.continuous_listening:
-                        Clock.schedule_once(
-                            lambda dt: self.bridge._restart_listening()
-                            if self.bridge.continuous_listening else None, 1
-                        )
-                @java_method("(Landroid/os/Bundle;)V")
-                def onResults(self, results):
-                    self.bridge.recognition_active = False
-                    try:
-                        SpeechRecognizer = autoclass(
-                            "android.speech.SpeechRecognizer"
-                        )
-                        items = results.getStringArrayList(
-                            SpeechRecognizer.RESULTS_RECOGNITION
-                        )
-                        if items and items.size() > 0:
-                            spoken = str(items.get(0))
-                            Clock.schedule_once(
-                                lambda dt: self.bridge._handle_voice(spoken), 0
-                            )
-                        else:
-                            Clock.schedule_once(
-                                lambda dt: self.bridge._restart_listening(), 0.5
-                            )
-                    except Exception as exc:
-                        print("LAIBA_VOICE_RESULT:", exc)
-
-                @java_method("(Landroid/os/Bundle;)V")
-                def onPartialResults(self, results):
-                    try:
-                        SpeechRecognizer = autoclass(
-                            "android.speech.SpeechRecognizer"
-                        )
-                        items = results.getStringArrayList(
-                            SpeechRecognizer.RESULTS_RECOGNITION
-                        )
-                        if items and items.size() > 0:
-                            spoken = str(items.get(0)).strip()
-                            if spoken and self.bridge.is_speaking:
-                                Clock.schedule_once(
-                                    lambda dt: self.bridge.stop_speaking(), 0
-                                )
-                    except Exception as exc:
-                        print("LAIBA_PARTIAL_VOICE:", exc)
-
-                @java_method("(ILandroid/os/Bundle;)V")
-                def onEvent(self, event, params):
-                    pass
-
-            Activity = autoclass("org.kivy.android.PythonActivity")
-            SpeechRecognizer = autoclass(
-                "android.speech.SpeechRecognizer"
-            )
-            if not SpeechRecognizer.isRecognitionAvailable(Activity.mActivity):
-                raise RuntimeError("Android speech recognition service is unavailable")
-            print("LAIBA_SPEECH: recognition service available", flush=True)
-            self.continuous_listening = True
-            self.recognition_active = False
-            self.recognition_listener = Listener(self)
-            self.speech_recognizer = (
-                SpeechRecognizer.createSpeechRecognizer(Activity.mActivity)
-            )
-            self.speech_recognizer.setRecognitionListener(
-                self.recognition_listener
-            )
-            print("LAIBA_SPEECH: recognizer initialized", flush=True)
-            self._restart_listening()
-
-        except Exception as exc:
-            self.continuous_listening = False
-            print("LAIBA_SPEECH_INIT_EXCEPTION:", repr(exc), flush=True)
-            self.message("Continuous voice error: " + str(exc))
-
-    def _restart_listening(self):
-        if not self.continuous_listening or not self.speech_recognizer:
-            return
-        if self.recognition_active:
-            return
-        if getattr(self, "is_speaking", False):
-            return
-
-        try:
-            from jnius import autoclass
-            Intent = autoclass("android.content.Intent")
-            RecognizerIntent = autoclass(
-                "android.speech.RecognizerIntent"
-            )
-            intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            intent.putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, True)
-            self.recognition_active = True
-            print("LAIBA_LISTEN: startListening called", flush=True)
-            self.speech_recognizer.startListening(intent)
-            print("LAIBA_LISTEN: startListening returned", flush=True)
-        except Exception as exc:
-            self.recognition_active = False
-            print("LAIBA_LISTEN_EXCEPTION:", repr(exc), flush=True)
-            self.message("Microphone start error: " + str(exc))
-
-    def _handle_voice(self, spoken):
-        if not self.continuous_listening:
-            return
-        self._send_spoken(spoken)
-
-    def stop_listening(self):
-        self.continuous_listening = False
-        self.recognition_active = False
-        try:
-            if self.speech_recognizer:
-                self.speech_recognizer.stopListening()
-                self.speech_recognizer.destroy()
-                self.speech_recognizer = None
-        except Exception as exc:
-            print("LAIBA_LISTEN_STOP:", exc)
-
-    def live_camera(self):
-        # External camera application handles its own camera/audio permissions.
-        # This application does not need to request them for VIDEO_CAPTURE.
-        self._start_video()
-
-    def _start_video(self):
-        try:
-            self._bind_activity()
-            from jnius import autoclass
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            Intent = autoclass("android.content.Intent")
-
-            intent = Intent("android.media.action.VIDEO_CAPTURE")
-            intent.putExtra("android.intent.extra.durationLimit", 60)
-            intent.putExtra("android.intent.extra.videoQuality", 1)
-            PythonActivity.mActivity.startActivityForResult(
-                intent, self.VIDEO_CODE
-            )
-        except Exception as exc:
-            self.message("Live camera error: " + str(exc))
-
-    def _activity_result(self, request_code, result_code, intent):
-        try:
-            code = int(request_code)
-            result = int(result_code)
-
-            if code == self.SPEECH_CODE:
-                if result == -1 and intent:
-                    from jnius import autoclass
-                    RecognizerIntent = autoclass(
-                        "android.speech.RecognizerIntent"
-                    )
-                    results = intent.getStringArrayListExtra(
-                        RecognizerIntent.EXTRA_RESULTS
-                    )
-                    if results and results.size() > 0:
-                        spoken = str(results.get(0))
-                        Clock.schedule_once(
-                            lambda dt: self._send_spoken(spoken), 0
-                        )
-                    else:
-                        self.message("Speech was not recognized.")
-                else:
-                    self.message("Microphone cancelled.")
-
-            elif code == self.GALLERY_CODE:
-                if result == -1 and intent:
-                    uri = intent.getData()
-                    if uri:
-                        self._copy_gallery_uri(uri)
-                    else:
-                        self.message("No image was selected.")
-                else:
-                    self.message("Gallery selection cancelled.")
-
-            elif code == self.CAMERA_CODE:
-                uri = self.camera_output_uri
-                self.camera_output_uri = None
-
-                if result == -1 and uri is not None:
-                    self._copy_gallery_uri(uri)
-                else:
-                    if uri is not None:
-                        try:
-                            from jnius import autoclass
-                            activity = autoclass(
-                                "org.kivy.android.PythonActivity"
-                            ).mActivity
-                            activity.getContentResolver().delete(
-                                uri, None, None
-                            )
-                        except Exception:
-                            pass
-                    self.message("Camera capture cancelled.")
-
-            elif code == self.VIDEO_CODE:
-                if result == -1:
-                    uri = intent.getData() if intent else None
-                    if uri:
-                        self.message(
-                            "Video captured. Saved video: " + str(uri.toString())
-                        )
-                    else:
-                        self.message("Video capture completed. Check your gallery.")
-                else:
-                    self.message("Video recording cancelled.")
-
-        except Exception as exc:
-            self.message("Android activity result error: " + str(exc))
-
-    def _send_spoken(self, spoken):
-        self.app.user_input.text = spoken
-        self.app.send_message()
+                        10
