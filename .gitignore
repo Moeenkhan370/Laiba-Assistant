@@ -27,3 +27,4 @@ gemini_history.json
 # Temporary build and diagnostic files
 *.log
 reports/
+.aider*
