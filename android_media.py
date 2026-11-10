@@ -23,6 +23,8 @@ class AndroidMediaBridge:
         self.speech_recognizer = None
         self.continuous_listening = False
         self.recognition_listener = None
+        self.recognition_active = False
+        self.is_speaking = False
         self.init_native_tts()
 
     def init_native_tts(self):
@@ -148,11 +150,13 @@ class AndroidMediaBridge:
                         str(permission) + "=" + str(grant)
                         for permission, grant in zip(perms, grants)
                     )
-                    print("LAIBA_PERMISSION_RESULT:", details)
+                    print("LAIBA_PERMISSION_RESULT:", details, flush=True)
 
                     if grants and all(bool(x) for x in grants):
+                        print("LAIBA_MIC_PERMISSION: GRANTED", flush=True)
                         callback()
                     else:
+                        print("LAIBA_MIC_PERMISSION: DENIED", details, flush=True)
                         self.message(
                             "Android permission denied: " + details
                         )
@@ -160,8 +164,10 @@ class AndroidMediaBridge:
                     self.message(
                         "Permission callback error: " + str(exc)
                     )
+            print("LAIBA_MIC_PERMISSION: requesting", names, flush=True)
             request_permissions(names, result)
         except Exception as exc:
+            print("LAIBA_PERMISSION_EXCEPTION:", repr(exc), flush=True)
             self.message("Android permission error: " + str(exc))
 
     CAMERA_CODE = 7315
@@ -407,6 +413,7 @@ class AndroidMediaBridge:
         self.activity_bound = True
 
     def microphone(self):
+        print("LAIBA_MIC_BUTTON: pressed", flush=True)
         self.permissions(
             ["android.permission.RECORD_AUDIO"],
             self._start_speech
@@ -428,10 +435,11 @@ class AndroidMediaBridge:
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onReadyForSpeech(self, params):
-                    pass
+                    print("LAIBA_SPEECH: ready for speech", flush=True)
 
                 @java_method("()V")
                 def onBeginningOfSpeech(self):
+                    print("LAIBA_SPEECH: speech detected", flush=True)
                     Clock.schedule_once(
                         lambda dt: self.bridge.stop_speaking(), 0
                     )
@@ -450,13 +458,30 @@ class AndroidMediaBridge:
 
                 @java_method("(I)V")
                 def onError(self, error):
+                    self.bridge.recognition_active = False
+                    names = {
+                        1: "NETWORK_TIMEOUT", 2: "NETWORK",
+                        3: "AUDIO", 4: "SERVER",
+                        5: "CLIENT", 6: "SPEECH_TIMEOUT",
+                        7: "NO_MATCH", 8: "RECOGNIZER_BUSY",
+                        9: "INSUFFICIENT_PERMISSIONS",
+                        10: "TOO_MANY_REQUESTS", 11: "SERVER_DISCONNECTED",
+                        12: "LANGUAGE_NOT_SUPPORTED",
+                        13: "LANGUAGE_UNAVAILABLE"
+                    }
+                    detail = names.get(int(error), "UNKNOWN")
+                    print("LAIBA_SPEECH_ERROR:", int(error), detail, flush=True)
+                    self.bridge.message(
+                        "Speech recognition error: " + detail
+                    )
                     if self.bridge.continuous_listening:
                         Clock.schedule_once(
-                            lambda dt: self.bridge._restart_listening(), 1
+                            lambda dt: self.bridge._restart_listening()
+                            if self.bridge.continuous_listening else None, 1
                         )
-
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
+                    self.bridge.recognition_active = False
                     try:
                         SpeechRecognizer = autoclass(
                             "android.speech.SpeechRecognizer"
@@ -502,7 +527,11 @@ class AndroidMediaBridge:
             SpeechRecognizer = autoclass(
                 "android.speech.SpeechRecognizer"
             )
+            if not SpeechRecognizer.isRecognitionAvailable(Activity.mActivity):
+                raise RuntimeError("Android speech recognition service is unavailable")
+            print("LAIBA_SPEECH: recognition service available", flush=True)
             self.continuous_listening = True
+            self.recognition_active = False
             self.recognition_listener = Listener(self)
             self.speech_recognizer = (
                 SpeechRecognizer.createSpeechRecognizer(Activity.mActivity)
@@ -510,16 +539,19 @@ class AndroidMediaBridge:
             self.speech_recognizer.setRecognitionListener(
                 self.recognition_listener
             )
+            print("LAIBA_SPEECH: recognizer initialized", flush=True)
             self._restart_listening()
 
         except Exception as exc:
             self.continuous_listening = False
+            print("LAIBA_SPEECH_INIT_EXCEPTION:", repr(exc), flush=True)
             self.message("Continuous voice error: " + str(exc))
 
     def _restart_listening(self):
         if not self.continuous_listening or not self.speech_recognizer:
             return
-
+        if self.recognition_active:
+            return
         if getattr(self, "is_speaking", False):
             return
 
@@ -536,9 +568,14 @@ class AndroidMediaBridge:
             )
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
             intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, True)
+            self.recognition_active = True
+            print("LAIBA_LISTEN: startListening called", flush=True)
             self.speech_recognizer.startListening(intent)
+            print("LAIBA_LISTEN: startListening returned", flush=True)
         except Exception as exc:
-            print("LAIBA_LISTEN_RESTART:", exc)
+            self.recognition_active = False
+            print("LAIBA_LISTEN_EXCEPTION:", repr(exc), flush=True)
+            self.message("Microphone start error: " + str(exc))
 
     def _handle_voice(self, spoken):
         if not self.continuous_listening:
@@ -547,6 +584,7 @@ class AndroidMediaBridge:
 
     def stop_listening(self):
         self.continuous_listening = False
+        self.recognition_active = False
         try:
             if self.speech_recognizer:
                 self.speech_recognizer.stopListening()

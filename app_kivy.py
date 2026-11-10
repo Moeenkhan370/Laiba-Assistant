@@ -639,13 +639,16 @@ class LaibaKivyApp(App):
 
     def end_voice_call(self, *args):
         self.voice_active = False
+        self.voice_muted = True
         self.media_bridge.stop_listening()
         self.media_bridge.stop_speaking()
         self.close_voice_mode()
 
     def close_voice_mode(self, *args):
         self.voice_active = False
+        self.voice_muted = True
         self.media_bridge.stop_listening()
+        self.media_bridge.stop_speaking()
         self.root.clear_widgets()
         self.root.add_widget(self.build_main_screen())
 
@@ -697,14 +700,14 @@ class LaibaKivyApp(App):
             self.voice_hint.text = "You can interrupt Laiba by speaking."
 
         elif state in ("done", "error"):
-            if not self.voice_muted:
+            if self.voice_active and not self.voice_muted:
                 self.voice_status.text = "Listening..."
                 self.voice_orb.set_state("listening")
                 self.voice_hint.text = "I'm listening. Speak now."
                 Clock.schedule_once(
                     lambda dt: self.media_bridge._restart_listening()
                     if self.voice_active and not self.voice_muted else None,
-                    0.4
+                    0.5
                 )
 
     def finish_reply(self, result, thinking):
