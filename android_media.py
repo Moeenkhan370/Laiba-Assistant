@@ -146,10 +146,22 @@ class AndroidMediaBridge:
 
     def _play_edge_audio(self, path, text):
         try:
-            from jnius import autoclass
+            from jnius import autoclass, PythonJavaClass, java_method
+            class DoneListener(PythonJavaClass):
+                __javainterfaces__ = ["android/media/MediaPlayer$OnCompletionListener"]
+                __javacontext__ = "app"
+                def __init__(self, bridge):
+                    super().__init__()
+                    self.bridge = bridge
+                @java_method("(Landroid/media/MediaPlayer;)V")
+                def onCompletion(self, mp):
+                    Clock.schedule_once(lambda dt: self.bridge._tts_state("done"), 0)
+
             MediaPlayer = autoclass("android.media.MediaPlayer")
             self.edge_player = MediaPlayer()
             self.edge_player.setDataSource(path)
+            self.edge_completion_listener = DoneListener(self)
+            self.edge_player.setOnCompletionListener(self.edge_completion_listener)
             self.edge_player.prepare()
             self.edge_player.start()
             self._tts_state("speaking")
@@ -505,6 +517,14 @@ class AndroidMediaBridge:
                 @java_method("(I)V")
                 def onError(self, error):
                     self.bridge.recognition_active = False
+                    Clock.schedule_once(lambda dt: self.bridge._tts_state("error"), 0)
+                    Clock.schedule_once(
+                        lambda dt: self.bridge._restart_listening()
+                        if getattr(self.bridge.app, "voice_active", False)
+                        and not getattr(self.bridge.app, "voice_muted", True)
+                        else None,
+                        1.5
+                    )
                     names = {
                         1: "NETWORK_TIMEOUT", 2: "NETWORK",
                         3: "AUDIO", 4: "SERVER",
@@ -529,6 +549,7 @@ class AndroidMediaBridge:
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
                     self.bridge.recognition_active = False
+                    Clock.schedule_once(lambda dt: self.bridge._tts_state("done"), 0)
                     try:
                         SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
                         matches = results.getStringArrayList(
@@ -570,7 +591,18 @@ class AndroidMediaBridge:
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
+            intent.putExtra(
+                RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
+                RecognizerIntent.LANGUAGE_SWITCH_BALANCED
+            )
+            from java.util import ArrayList
+            languages = ArrayList()
+            languages.add("ur-PK")
+            languages.add("en-US")
+            intent.putStringArrayListExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
+                languages
+            )
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
 
             if not self.recognition_active:

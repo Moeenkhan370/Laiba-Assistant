@@ -740,6 +740,8 @@ class LaibaKivyApp(App):
         if thinking.parent:
             thinking.parent.remove_widget(thinking)
         self.add_bubble(str(result), "Laiba")
+        if getattr(self, "voice_active", False):
+            self.voice_status.text = "Laiba is replying..."
         self.media_bridge.speak(str(result))
 
 
