@@ -30,15 +30,20 @@ jobs:
 
       - name: Install Android Build Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git zip unzip \
-            autoconf automake libtool \
-            pkg-config cmake \
-            zlib1g-dev libncurses5-dev \
-            libncursesw5-dev libtinfo6 \
-            libffi-dev libssl-dev \
-            build-essential
+          for attempt in 1 2 3 4 5; do
+            echo "APT attempt $attempt of 5"
+            if sudo apt-get update && sudo apt-get install -y \
+              git zip unzip autoconf automake libtool \
+              pkg-config cmake zlib1g-dev libncurses5-dev \
+              libncursesw5-dev libtinfo6 libffi-dev libssl-dev \
+              build-essential; then
+              exit 0
+            fi
+            echo "APT failed. Retrying in 20 seconds..."
+            sleep 20
+          done
+          echo "APT installation failed after 5 attempts."
+          exit 1
 
       - name: Install Buildozer
         run: |
