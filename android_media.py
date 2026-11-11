@@ -1,4 +1,5 @@
 import os
+import asyncio
 from threading import Thread
 from kivy.clock import Clock
 from kivy.metrics import dp
@@ -18,6 +19,7 @@ class AndroidMediaBridge:
         self.activity_bound = False
         self.camera_output_uri = None
         self.tts = None
+        self.edge_player = None
         self.tts_ready = False
         self.speech_recognizer = None
         self.continuous_listening = False
@@ -108,37 +110,68 @@ class AndroidMediaBridge:
     def stop_speaking(self):
         self.is_speaking = False
         try:
+            if self.edge_player:
+                self.edge_player.stop()
+                self.edge_player.release()
+                self.edge_player = None
+        except Exception as exc:
+            print("LAIBA_EDGE_STOP:", exc)
+        try:
             if self.tts:
                 self.tts.stop()
         except Exception as exc:
             print("LAIBA_TTS_STOP:", exc)
 
     def speak(self, text):
+        self.is_speaking = True
+        Thread(target=self._generate_edge_audio, args=(str(text),), daemon=True).start()
+
+    def _generate_edge_audio(self, text):
+        try:
+            import edge_tts
+            os.makedirs(self.app.user_data_dir, exist_ok=True)
+            path = os.path.join(self.app.user_data_dir, "laiba_speech.mp3")
+
+            async def generate():
+                tts = edge_tts.Communicate(
+                    text, "ur-PK-UzmaNeural"
+                )
+                await tts.save(path)
+
+            asyncio.run(generate())
+            Clock.schedule_once(lambda dt: self._play_edge_audio(path, text), 0)
+        except Exception as exc:
+            print("LAIBA_EDGE_ERROR:", repr(exc), flush=True)
+            Clock.schedule_once(lambda dt: self._speak_native(text), 0)
+
+    def _play_edge_audio(self, path, text):
         try:
             from jnius import autoclass
-            self.is_speaking = True
+            MediaPlayer = autoclass("android.media.MediaPlayer")
+            self.edge_player = MediaPlayer()
+            self.edge_player.setDataSource(path)
+            self.edge_player.prepare()
+            self.edge_player.start()
+            self._tts_state("speaking")
+        except Exception as exc:
+            print("LAIBA_EDGE_PLAYBACK_ERROR:", repr(exc), flush=True)
+            self._speak_native(text)
 
+    def _speak_native(self, text):
+        try:
+            from jnius import autoclass
             if not self.tts or not self.tts_ready:
-                print("LAIBA_TTS_PENDING: waiting for initialization", flush=True)
                 self.pending_speech = str(text)
-                self.is_speaking = False
                 return
-
             TTS = autoclass("android.speech.tts.TextToSpeech")
             result = self.tts.speak(
                 str(text), TTS.QUEUE_FLUSH, None, "laiba_reply"
             )
-
             if result == TTS.ERROR:
-                Clock.schedule_once(
-                    lambda dt: self._tts_state("error"), 0
-                )
-
+                self._tts_state("error")
         except Exception as exc:
-            print("LAIBA_TTS_SPEAK_ERROR:", exc)
-            Clock.schedule_once(
-                lambda dt: self._tts_state("error"), 0
-            )
+            print("LAIBA_NATIVE_FALLBACK_ERROR:", exc)
+            self._tts_state("error")
 
     def _tts_state(self, state):
         self.is_speaking = (state == "speaking")

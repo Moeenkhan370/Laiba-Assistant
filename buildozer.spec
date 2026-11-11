@@ -9,7 +9,7 @@ android.presplash_color = #000000
 source.include_exts = py,kv,png,jpg,jpeg,json,txt,md,obj,stl,ply
 source.exclude_dirs = .git,venv,.venv,env,__pycache__,.buildozer,bin,exports,.laiba_backups,backup
 version = 1.0.2
-requirements = python3,kivy,requests,plyer,pyjnius
+requirements = python3,kivy,requests,plyer,pyjnius,edge-tts
 orientation = portrait
 fullscreen = 0
 
