@@ -63,10 +63,10 @@ DEFAULT_CONFIG = {
     
     # Hardware & System Permissions
     "PERMISSIONS": {
-        "MICROPHONE": False,  # No Android speech bridge is included yet.
-        "CAMERA": False,  # No Android camera bridge is included yet.
+        "MICROPHONE": True,  # No Android speech bridge is included yet.
+        "CAMERA": True,  # No Android camera bridge is included yet.
         "ACCESSIBILITY": False,
-        "STORAGE": False,
+        "STORAGE": True,
         "SYSTEM_MODIFICATION": False
     },
     
