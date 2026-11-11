@@ -690,6 +690,32 @@ class LaibaKivyApp(App):
 
         Thread(target=worker, daemon=True).start()
 
+    def send_voice_transcript(self, text):
+        text = str(text).strip()
+        if not text:
+            return
+
+        self.add_bubble(text, "You")
+        thinking = Label(
+            text="Laiba is thinking...",
+            color=(0, 0.85, 1, 1),
+            size_hint_y=None,
+            height=dp(32)
+        )
+        self.message_list.add_widget(thinking)
+
+        def worker():
+            try:
+                result = self.chatbot.process_message(text)
+            except Exception as exc:
+                result = "Network or AI error: " + str(exc)
+
+            Clock.schedule_once(
+                lambda dt: self.finish_reply(result, thinking), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
     def on_tts_state(self, state):
         if not getattr(self, "voice_active", False):
             return

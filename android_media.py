@@ -53,6 +53,14 @@ class AndroidMediaBridge:
                             self.bridge.tts_ready = (
                                 result >= TTS.LANG_AVAILABLE
                             )
+                            print("LAIBA_TTS_READY:", self.bridge.tts_ready, flush=True)
+                            if self.bridge.tts_ready:
+                                pending = getattr(self.bridge, "pending_speech", None)
+                                self.bridge.pending_speech = None
+                                if pending:
+                                    Clock.schedule_once(
+                                        lambda dt: self.bridge.speak(pending), 0
+                                    )
                     except Exception as exc:
                         print("LAIBA_TTS_INIT:", exc)
 
@@ -111,10 +119,9 @@ class AndroidMediaBridge:
             self.is_speaking = True
 
             if not self.tts or not self.tts_ready:
-                print("LAIBA_TTS_NOT_READY")
-                Clock.schedule_once(
-                    lambda dt: self._tts_state("error"), 0
-                )
+                print("LAIBA_TTS_PENDING: waiting for initialization", flush=True)
+                self.pending_speech = str(text)
+                self.is_speaking = False
                 return
 
             TTS = autoclass("android.speech.tts.TextToSpeech")
@@ -472,7 +479,19 @@ class AndroidMediaBridge:
                         7: "NO_MATCH", 8: "RECOGNIZER_BUSY",
                         9: "INSUFFICIENT_PERMISSIONS"
                     }
-                    print("LAIBA_SPEECH_ERROR:", error, names.get(error, "UNKNOWN"))
+                    print("LAIBA_SPEECH_ERROR:", error, names.get(error, "UNKNOWN"), flush=True)
+
+                    if error == 8:
+                        def recover(dt):
+                            try:
+                                if self.bridge.speech_recognizer:
+                                    self.bridge.speech_recognizer.destroy()
+                            except Exception as exc:
+                                print("LAIBA_RECOGNIZER_RESET:", exc)
+                            self.bridge.speech_recognizer = None
+                            self.bridge.recognition_listener = None
+
+                        Clock.schedule_once(recover, 0)
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
@@ -486,7 +505,7 @@ class AndroidMediaBridge:
                             text = str(matches.get(0))
                             print("LAIBA_SPEECH_RESULT:", text)
                             Clock.schedule_once(
-                                lambda dt: self.app.send_voice_transcript(text), 0
+                                lambda dt: self.bridge.app.send_voice_transcript(text), 0
                             )
                     except Exception as exc:
                         print("LAIBA_SPEECH_RESULTS_ERROR:", exc)
