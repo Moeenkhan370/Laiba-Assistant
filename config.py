@@ -4,9 +4,8 @@ Handles platform permissions, API key integration, UI Pure Black theme,
 3D engine parameters, and WhatsApp zip packaging export paths.
 """
 
-import os
 import json
-import sys
+import os
 
 # Default Pure Black Theme and System Configuration
 DEFAULT_CONFIG = {
@@ -93,7 +92,7 @@ def load_config():
                     else:
                         merged[k] = v
                 return merged
-        except Exception as e:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
             print(f"[Config] Error loading config file, fallback to default: {e}")
     return DEFAULT_CONFIG.copy()
 
@@ -103,7 +102,7 @@ def save_config(cfg):
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)
         return True
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         print(f"[Config] Error saving config: {e}")
         return False
 

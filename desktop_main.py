@@ -9,16 +9,14 @@ Tkinter pure-black dynamic assistant featuring:
 """
 
 import os
-import sys
-import time
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import filedialog, messagebox
 
-from config import CURRENT_CONFIG, save_config
+from config import CURRENT_CONFIG
 from engines.chatbot_engine import ChatbotEngine
-from engines.self_update import SelfUpdateEngine
 from engines.file_modifier import FileModifierEngine
+from engines.self_update import SelfUpdateEngine
 from engines.threed_engine import ThreeDEngine
 
 
@@ -404,7 +402,7 @@ class LaibaApp:
                 self.selected_image_path = mock_path
                 self.get_img_var().set("📷 Camera Snapshot Ready")
                 self.log_chat("System", f"📷 Captured Camera Frame saved to '{mock_path}'.")
-            except Exception as e:
+            except (OSError, ValueError, ImportError):
                 messagebox.showinfo("Camera Engine", "Camera snapshot triggered. Select an image file to process with Gemini vision.")
 
     def on_interrupt(self):
@@ -426,7 +424,7 @@ class LaibaApp:
 
 def main():
     root = tk.Tk()
-    app = LaibaApp(root)
+    LaibaApp(root)
     root.mainloop()
 
 
