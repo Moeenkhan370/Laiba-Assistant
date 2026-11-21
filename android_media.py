@@ -1,5 +1,4 @@
 import os
-import asyncio
 from threading import Thread
 from kivy.clock import Clock
 from kivy.metrics import dp
@@ -19,7 +18,6 @@ class AndroidMediaBridge:
         self.activity_bound = False
         self.camera_output_uri = None
         self.tts = None
-        self.edge_player = None
         self.tts_ready = False
         self.speech_recognizer = None
         self.continuous_listening = False
@@ -66,44 +64,12 @@ class AndroidMediaBridge:
                     except Exception as exc:
                         print("LAIBA_TTS_INIT:", exc)
 
-            class ProgressListener(PythonJavaClass):
-                __javainterfaces__ = [
-                    "android/speech/tts/UtteranceProgressListener"
-                ]
-                __javacontext__ = "app"
-
-                def __init__(self, bridge):
-                    super().__init__()
-                    self.bridge = bridge
-
-                @java_method("(Ljava/lang/String;)V")
-                def onStart(self, utterance_id):
-                    Clock.schedule_once(
-                        lambda dt: self.bridge._tts_state("speaking"), 0
-                    )
-
-                @java_method("(Ljava/lang/String;)V")
-                def onDone(self, utterance_id):
-                    Clock.schedule_once(
-                        lambda dt: self.bridge._tts_state("done"), 0
-                    )
-
-                @java_method("(Ljava/lang/String;)V")
-                def onError(self, utterance_id):
-                    Clock.schedule_once(
-                        lambda dt: self.bridge._tts_state("error"), 0
-                    )
-
-            self.tts_progress_listener = ProgressListener(self)
 
             Activity = autoclass("org.kivy.android.PythonActivity")
             self.tts_listener = Listener(self)
             self.tts = autoclass(
                 "android.speech.tts.TextToSpeech"
             )(Activity.mActivity, self.tts_listener)
-            self.tts.setOnUtteranceProgressListener(
-                self.tts_progress_listener
-            )
         except Exception as exc:
             print("LAIBA_NATIVE_TTS_ERROR:", exc)
 
@@ -111,64 +77,13 @@ class AndroidMediaBridge:
         self.is_speaking = False
         self.pending_speech = None
         try:
-            if self.edge_player:
-                self.edge_player.stop()
-                self.edge_player.release()
-                self.edge_player = None
-        except Exception as exc:
-            print("LAIBA_EDGE_STOP:", exc)
-        try:
             if self.tts:
                 self.tts.stop()
         except Exception as exc:
             print("LAIBA_TTS_STOP:", exc)
 
     def speak(self, text):
-        self.is_speaking = True
-        Thread(target=self._generate_edge_audio, args=(str(text),), daemon=True).start()
-
-    def _generate_edge_audio(self, text):
-        try:
-            import edge_tts
-            os.makedirs(self.app.user_data_dir, exist_ok=True)
-            path = os.path.join(self.app.user_data_dir, "laiba_speech.mp3")
-
-            async def generate():
-                tts = edge_tts.Communicate(
-                    text, "ur-PK-UzmaNeural"
-                )
-                await tts.save(path)
-
-            asyncio.run(generate())
-            Clock.schedule_once(lambda dt: self._play_edge_audio(path, text), 0)
-        except Exception as exc:
-            print("LAIBA_EDGE_ERROR:", repr(exc), flush=True)
-            Clock.schedule_once(lambda dt: self._speak_native(text), 0)
-
-    def _play_edge_audio(self, path, text):
-        try:
-            from jnius import autoclass, PythonJavaClass, java_method
-            class DoneListener(PythonJavaClass):
-                __javainterfaces__ = ["android/media/MediaPlayer$OnCompletionListener"]
-                __javacontext__ = "app"
-                def __init__(self, bridge):
-                    super().__init__()
-                    self.bridge = bridge
-                @java_method("(Landroid/media/MediaPlayer;)V")
-                def onCompletion(self, mp):
-                    Clock.schedule_once(lambda dt: self.bridge._tts_state("done"), 0)
-
-            MediaPlayer = autoclass("android.media.MediaPlayer")
-            self.edge_player = MediaPlayer()
-            self.edge_player.setDataSource(path)
-            self.edge_completion_listener = DoneListener(self)
-            self.edge_player.setOnCompletionListener(self.edge_completion_listener)
-            self.edge_player.prepare()
-            self.edge_player.start()
-            self._tts_state("speaking")
-        except Exception as exc:
-            print("LAIBA_EDGE_PLAYBACK_ERROR:", repr(exc), flush=True)
-            self._speak_native(text)
+        self._speak_native(str(text))
 
     def _speak_native(self, text):
         try:
@@ -176,14 +91,47 @@ class AndroidMediaBridge:
             if not self.tts or not self.tts_ready:
                 self.pending_speech = str(text)
                 return
+
             TTS = autoclass("android.speech.tts.TextToSpeech")
             result = self.tts.speak(
                 str(text), TTS.QUEUE_FLUSH, None, "laiba_reply"
             )
             if result == TTS.ERROR:
                 self._tts_state("error")
+                return
+
+            self.is_speaking = True
+            self._tts_state("speaking")
+            Clock.schedule_once(
+                lambda dt: self._poll_native_tts(0, 0), 0.25
+            )
         except Exception as exc:
-            print("LAIBA_NATIVE_FALLBACK_ERROR:", exc)
+            print("LAIBA_NATIVE_TTS_ERROR:", repr(exc), flush=True)
+            self._tts_state("error")
+
+    def _poll_native_tts(self, idle_count=0, attempts=0):
+        if not self.is_speaking:
+            return
+        try:
+            speaking = bool(self.tts.isSpeaking())
+            if speaking:
+                idle_count = 0
+            else:
+                idle_count += 1
+
+            if idle_count >= 3:
+                self._tts_state("done")
+                return
+            if attempts >= 1800:
+                self._tts_state("error")
+                return
+
+            Clock.schedule_once(
+                lambda dt: self._poll_native_tts(idle_count, attempts + 1),
+                0.2
+            )
+        except Exception as exc:
+            print("LAIBA_TTS_POLL_ERROR:", repr(exc), flush=True)
             self._tts_state("error")
 
     def _tts_state(self, state):
