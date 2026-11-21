@@ -337,16 +337,8 @@ class ChatbotEngine:
             str(k).strip() for k in configured_keys if str(k).strip()
         ))
 
-        free_model_priority = [
-            "gemini-3.8-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ]
-
+        # Use every compatible Flash model returned by Google's live
+        # ListModels API. The discovery method already filters capabilities.
         errors = []
         discovered_union = []
         switched_model = False
@@ -359,10 +351,10 @@ class ChatbotEngine:
                     discovered = self.discover_flash_models(api_key)
                     self._model_cache[api_key] = list(discovered)
 
-                available = set(discovered)
-                key_models = [
-                    name for name in free_model_priority if name in available
-                ]
+                key_models = list(dict.fromkeys(
+                    name for name in discovered
+                    if isinstance(name, str) and "flash" in name.lower()
+                ))
 
                 for name in key_models:
                     if name not in discovered_union:
@@ -431,8 +423,7 @@ class ChatbotEngine:
 
                         switched_model = bool(
                             active_model and
-                            api_key == active_key and
-                            model != active_model
+                            (api_key != active_key or model != active_model)
                         )
 
                         self.api_key = api_key
@@ -447,7 +438,8 @@ class ChatbotEngine:
                         CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
                         CURRENT_CONFIG["GEMINI_MODEL"] = model
                         CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
-                        save_config(CURRENT_CONFIG)
+                        if not save_config(CURRENT_CONFIG):
+                            print("[LAIBA] WARNING: Could not persist the active Gemini model.")
 
                         self.chat_history.extend([
                             {"role": "user", "parts": parts},
@@ -461,7 +453,7 @@ class ChatbotEngine:
                         if switched_model:
                             notice = (
                                 "میرا موجودہ ماڈل دستیاب نہیں رہا، میں نے "
-                                "خودکار طور پر دوسرے دستیاب Free Gemini ماڈل "
+                                "خودکار طور پر دوسرے دستیاب Gemini Flash ماڈل "
                                 "پر سوئچ کر لیا ہے۔ ہماری گفتگو جاری ہے۔"
                             )
                             return notice + "\n\n" + answer
@@ -491,6 +483,10 @@ class ChatbotEngine:
                 continue
 
         self.model_candidates = discovered_union or self.model_candidates
+        if errors:
+            print("[LAIBA] Gemini failover diagnostics:")
+            for error in errors[-8:]:
+                print("[LAIBA]", self._redact_api_keys(error))
         return (
             "لائبہ اس وقت دستیاب Gemini ماڈلز سے جواب حاصل نہیں کر سکی۔ "
             "براہِ کرم کچھ دیر بعد دوبارہ کوشش کریں۔"
