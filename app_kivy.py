@@ -153,12 +153,12 @@ class LaibaKivyApp(App):
             print("[LAIBA] Chat history save error:", exc)
 
     def build_setup_screen(self):
-        root = BoxLayout(
-            orientation="vertical",
-            padding=dp(24),
-            spacing=dp(16)
+        root = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(3)
         )
-        root.canvas.before.clear()
+        self.setup_scroll = root
+
         with root.canvas.before:
             Color(0.015, 0.025, 0.055, 1)
             root_bg = Rectangle(pos=root.pos, size=root.size)
@@ -167,15 +167,23 @@ class LaibaKivyApp(App):
             size=lambda obj, val: setattr(root_bg, "size", val)
         )
 
-        root.add_widget(Label(
-            text="[b]⚡ LAIBA AI[/b]",
+        content = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=dp(24),
+            spacing=dp(16)
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        content.add_widget(Label(
+            text="[b]LAIBA AI[/b]",
             markup=True,
             font_size="28sp",
             color=(0, 0.9, 1, 1),
             size_hint_y=None,
             height=dp(85)
         ))
-        root.add_widget(Label(
+        content.add_widget(Label(
             text="Connect your Gemini AI brain",
             font_size="16sp",
             color=(0.8, 0.9, 1, 1),
@@ -194,7 +202,8 @@ class LaibaKivyApp(App):
             cursor_color=(0, 0.9, 1, 1)
         )
         self.api_key_input.bind(on_text_validate=self.verify_api_key)
-        root.add_widget(self.api_key_input)
+        self.api_key_input.bind(focus=self._on_setup_input_focus)
+        content.add_widget(self.api_key_input)
 
         self.verify_button = Button(
             text="CONNECT GEMINI",
@@ -205,15 +214,32 @@ class LaibaKivyApp(App):
             color=(1, 1, 1, 1)
         )
         self.verify_button.bind(on_release=self.verify_api_key)
-        root.add_widget(self.verify_button)
+        content.add_widget(self.verify_button)
 
         self.setup_status = Label(
             text="Your API key stays in this app's private storage.",
             color=(0.65, 0.8, 0.9, 1),
-            halign="center"
+            halign="center",
+            size_hint_y=None,
+            height=dp(54)
         )
-        root.add_widget(self.setup_status)
+        content.add_widget(self.setup_status)
+
+        root.add_widget(content)
         return root
+
+    def _on_setup_input_focus(self, instance, focused):
+        if focused and hasattr(self, "setup_scroll"):
+            Clock.schedule_once(
+                lambda dt: self.setup_scroll.scroll_to(
+                    instance, padding=dp(32), animate=True
+                ), 0.15
+            )
+            Clock.schedule_once(
+                lambda dt: self.setup_scroll.scroll_to(
+                    instance, padding=dp(32), animate=True
+                ), 0.4
+            )
 
     def verify_api_key(self, instance):
         key = self.api_key_input.text.strip()
@@ -460,9 +486,10 @@ class LaibaKivyApp(App):
         copy_btn = Button(
             text="COPY",
             size_hint=(None, None),
-            size=(dp(52), dp(32)),
-            font_size="10sp",
+            size=(dp(64), dp(38)),
+            font_size="11sp",
             background_normal="",
+            background_down="",
             background_color=(0.025, 0.23, 0.32, 1),
             color=(0.4, 0.95, 1, 1)
         )
@@ -475,7 +502,7 @@ class LaibaKivyApp(App):
         row.add_widget(copy_btn)
 
         def update_layout(*args):
-            available = max(dp(80), row.width - dp(65))
+            available = max(dp(80), row.width - dp(76))
             label.text_size = (available - dp(16), None)
             label.texture_update()
             label.height = label.texture_size[1] + dp(12)
