@@ -1,4 +1,6 @@
 [app]
+
+android.extra_manifest_xml = ./src/android/extra_manifest.xml
 title = Laiba Assistant
 package.name = laibaassistant
 package.domain = com.moeen

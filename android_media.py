@@ -574,6 +574,9 @@ class AndroidMediaBridge:
                             )
                     except Exception as exc:
                         print("LAIBA_SPEECH_RESULTS_ERROR:", exc)
+                        Clock.schedule_once(
+                            lambda dt: self.bridge._restart_listening(), 0.7
+                        )
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onPartialResults(self, partialResults):
