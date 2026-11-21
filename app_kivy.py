@@ -297,151 +297,153 @@ class LaibaKivyApp(App):
         self.root.clear_widgets()
         self.root.add_widget(screen)
 
-    def build_main_screen(self):
-        self.title = "Laiba AI Assistant"
-        root = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(9))
 
-        with root.canvas.before:
-            Color(0.008, 0.018, 0.045, 1)
-            bg = Rectangle(pos=root.pos, size=root.size)
-        root.bind(pos=lambda o,v: setattr(bg,"pos",v),
-                  size=lambda o,v: setattr(bg,"size",v))
+def build_main_screen(self):
+    self.title = "Laiba AI Assistant"
+    root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(7))
 
-        header = BoxLayout(size_hint_y=None, height=dp(55), spacing=dp(8))
-        header.add_widget(Label(
-            text="[b]LAIBA[/b] [color=00DFFF]AI[/color]",
-            markup=True, font_size="23sp", halign="left",
-            color=(0.85,0.96,1,1)))
-        self.network_label = Label(
-            text="● Checking...", size_hint_x=None, width=dp(105),
-            font_size="11sp", color=(1,0.8,0.25,1))
-        header.add_widget(self.network_label)
+    with root.canvas.before:
+        Color(0.008, 0.018, 0.045, 1)
+        bg = Rectangle(pos=root.pos, size=root.size)
+    root.bind(pos=lambda o,v:setattr(bg,"pos",v),
+              size=lambda o,v:setattr(bg,"size",v))
 
-        zip_button = Button(text="ZIP", size_hint_x=None, width=dp(55),
-            background_normal="", background_color=(0.02,0.35,0.48,1))
-        zip_button.bind(on_release=self.export_zip)
-        header.add_widget(zip_button)
+    header = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
+    header.add_widget(Label(
+        text="[b]LAIBA[/b] [color=00DFFF]AI[/color]",
+        markup=True, font_size="22sp", halign="left",
+        color=(0.85,0.96,1,1)))
 
-        keys_button = Button(
-            text="API KEYS", size_hint_x=None, width=dp(78),
-            font_size="10sp", background_normal="",
-            background_color=(0.35, 0.12, 0.48, 1)
-        )
-        keys_button.bind(on_release=self.open_api_keys)
-        header.add_widget(keys_button)
-        root.add_widget(header)
+    self.network_label = Label(
+        text="● Checking...", size_hint_x=None, width=dp(92),
+        font_size="11sp", color=(1,0.8,0.25,1))
+    header.add_widget(self.network_label)
 
-        voice_button = Button(
-            text="✦  OPEN VOICE MODE",
-            size_hint_y=None,
-            height=dp(48),
-            font_size="15sp",
-            bold=True,
-            background_normal="",
-            background_color=(0.015, 0.30, 0.48, 1),
-            color=(0.35, 0.88, 1, 1)
-        )
-        voice_button.bind(on_release=self.open_voice_mode)
-        root.add_widget(voice_button)
+    menu = Button(text="☰ MENU", size_hint_x=None, width=dp(88),
+        background_normal="", background_color=(0.20,0.12,0.48,1))
+    menu.bind(on_release=self.open_settings_menu)
+    header.add_widget(menu)
+    root.add_widget(header)
 
-        orb_panel = BoxLayout(orientation="vertical", size_hint_y=None,
-                              height=dp(145), padding=dp(8), spacing=dp(2))
-        with orb_panel.canvas.before:
-            Color(0.025,0.075,0.13,1)
-            orb_bg = RoundedRectangle(pos=orb_panel.pos,
-                                      size=orb_panel.size, radius=[dp(22)])
-        orb_panel.bind(pos=lambda o,v:setattr(orb_bg,"pos",v),
-                       size=lambda o,v:setattr(orb_bg,"size",v))
-        orb_panel.add_widget(Label(
-            text="[color=00DFFF]◉[/color]", markup=True,
-            font_size="66sp", color=(0.1,0.8,1,1)))
-        orb_panel.add_widget(Label(
-            text="[b]LAIBA AI[/b]  •  Always ready",
-            markup=True, font_size="13sp", color=(0.7,0.9,1,1),
-            size_hint_y=None, height=dp(25)))
-        root.add_widget(orb_panel)
+    self.chat_scroll = ScrollView(do_scroll_x=False, bar_width=dp(3))
+    self.message_list = BoxLayout(
+        orientation="vertical", size_hint_y=None,
+        spacing=dp(9), padding=(dp(3),dp(8)))
+    self.message_list.bind(
+        minimum_height=self.message_list.setter("height"))
+    self.chat_scroll.add_widget(self.message_list)
+    root.add_widget(self.chat_scroll)
 
-        self.three_d_widget = ThreeDCanvasWidget(
-            self.threed_engine, size_hint_y=None, height=dp(115))
-        root.add_widget(self.three_d_widget)
+    if self.chat_history:
+        for item in self.chat_history[-60:]:
+            self.add_bubble(item.get("text",""),
+                            item.get("sender","Laiba"), save=False)
+    else:
+        self.add_bubble(
+            "Assalam-o-Alaikum! Main Laiba hoon. Aap mujh se Urdu, "
+            "Roman Urdu ya English mein baat kar sakte hain.", "Laiba")
 
-        controls = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        for label, callback in [
-            ("Rotate X", lambda x:self.rotate_mesh(15,0,0)),
-            ("Rotate Y", lambda x:self.rotate_mesh(0,15,0)),
-            ("Cube / Pyramid", self.toggle_shape)
-        ]:
-            b = Button(text=label, font_size="11sp",
-                background_normal="", background_color=(0.035,0.16,0.25,1),
-                color=(0.35,0.9,1,1))
-            b.bind(on_release=callback)
-            controls.add_widget(b)
-        root.add_widget(controls)
+    panel = BoxLayout(orientation="vertical",
+        size_hint_y=None, height=dp(101), spacing=dp(5), padding=dp(5))
+    with panel.canvas.before:
+        Color(0.025,0.065,0.11,1)
+        panel_bg = RoundedRectangle(pos=panel.pos,
+            size=panel.size, radius=[dp(17)])
+    panel.bind(pos=lambda o,v:setattr(panel_bg,"pos",v),
+               size=lambda o,v:setattr(panel_bg,"size",v))
 
-        self.chat_scroll = ScrollView(do_scroll_x=False, bar_width=dp(3))
-        self.message_list = BoxLayout(
-            orientation="vertical", size_hint_y=None,
-            spacing=dp(9), padding=(dp(3),dp(8)))
-        self.message_list.bind(
-            minimum_height=self.message_list.setter("height"))
-        self.chat_scroll.add_widget(self.message_list)
-        root.add_widget(self.chat_scroll)
+    media = BoxLayout(size_hint_y=None, height=dp(37), spacing=dp(6))
+    for name, callback in [
+        ("Camera",self.open_camera),
+        ("Gallery",self.open_gallery),
+        ("Live",self.open_live_camera),
+        ("Mic",self.open_microphone)
+    ]:
+        b = Button(text=name, font_size="11sp",
+            background_normal="", background_color=(0.025,0.23,0.32,1),
+            color=(0.4,0.95,1,1))
+        b.bind(on_release=callback)
+        media.add_widget(b)
+    panel.add_widget(media)
 
-        if self.chat_history:
-            for item in self.chat_history[-60:]:
-                self.add_bubble(item.get("text",""),
-                                item.get("sender","Laiba"), save=False)
-        else:
-            self.add_bubble(
-                "Assalam-o-Alaikum! Main Laiba hoon. Aap mujh se Urdu, "
-                "Roman Urdu ya English mein baat kar sakte hain.", "Laiba")
+    composer = BoxLayout(size_hint_y=None, height=dp(49), spacing=dp(6))
+    self.user_input = TextInput(
+        hint_text="Message Laiba...", multiline=False,
+        background_normal="", background_active="",
+        background_color=(0.055,0.10,0.16,1),
+        foreground_color=(1,1,1,1), cursor_color=(0,0.9,1,1),
+        hint_text_color=(0.5,0.68,0.78,1),
+        padding=(dp(12),dp(12)))
+    self.user_input.bind(on_text_validate=self.send_message)
+    composer.add_widget(self.user_input)
 
-        input_panel = BoxLayout(orientation="vertical",
-            size_hint_y=None, height=dp(105), spacing=dp(5), padding=dp(5))
-        with input_panel.canvas.before:
-            Color(0.025,0.065,0.11,1)
-            panel_bg = RoundedRectangle(pos=input_panel.pos,
-                size=input_panel.size, radius=[dp(17)])
-        input_panel.bind(pos=lambda o,v:setattr(panel_bg,"pos",v),
-                         size=lambda o,v:setattr(panel_bg,"size",v))
+    send = Button(text="➤", size_hint_x=None, width=dp(52),
+        font_size="22sp", background_normal="",
+        background_color=(0,0.65,0.82,1))
+    send.bind(on_release=self.send_message)
+    composer.add_widget(send)
+    panel.add_widget(composer)
+    root.add_widget(panel)
 
-        media_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
-        for icon_text, callback in [
-            ("Camera",self.open_camera),
-            ("Gallery",self.open_gallery),
-            ("Live",self.open_live_camera),
-            ("Mic",self.open_microphone)
-        ]:
-            b = Button(text=icon_text, font_size="11sp",
-                background_normal="", background_color=(0.025,0.23,0.32,1),
-                color=(0.4,0.95,1,1))
-            b.bind(on_release=callback)
-            media_row.add_widget(b)
-        input_panel.add_widget(media_row)
+    Clock.schedule_once(lambda dt:self.check_network(),0.5)
+    Clock.schedule_interval(lambda dt:self.check_network(),30)
+    return root
 
-        composer = BoxLayout(size_hint_y=None, height=dp(49), spacing=dp(6))
-        self.user_input = TextInput(
-            hint_text="Message Laiba...", multiline=False,
-            background_normal="", background_active="",
-            background_color=(0.055,0.10,0.16,1),
-            foreground_color=(1,1,1,1), cursor_color=(0,0.9,1,1),
-            hint_text_color=(0.5,0.68,0.78,1),
-            padding=(dp(12),dp(12)))
-        self.user_input.bind(on_text_validate=self.send_message)
-        composer.add_widget(self.user_input)
+def open_settings_menu(self, *args):
+    content = BoxLayout(orientation="vertical",
+                        padding=dp(12), spacing=dp(9))
+    content.add_widget(Label(text="[b]LAIBA SETTINGS[/b]",
+        markup=True, size_hint_y=None, height=dp(38),
+        color=(0,0.85,1,1), font_size="19sp"))
 
-        send_button = Button(text="➤", size_hint_x=None, width=dp(52),
-            font_size="22sp", background_normal="",
-            background_color=(0,0.65,0.82,1),
-            color=(1,1,1,1))
-        send_button.bind(on_release=self.send_message)
-        composer.add_widget(send_button)
-        input_panel.add_widget(composer)
-        root.add_widget(input_panel)
+    scroll = ScrollView(do_scroll_x=False)
+    items = BoxLayout(orientation="vertical",
+        size_hint_y=None, spacing=dp(9), padding=dp(3))
+    items.bind(minimum_height=items.setter("height"))
 
-        Clock.schedule_once(lambda dt:self.check_network(),0.5)
-        Clock.schedule_interval(lambda dt:self.check_network(),30)
-        return root
+    popup = Popup(title="Laiba Settings", content=content,
+                  size_hint=(0.94,0.88))
+
+    for label, callback, color in [
+        ("OPEN VOICE MODE", self.open_voice_mode, (0,0.35,0.55,1)),
+        ("GEMINI API KEYS", self.open_api_keys, (0.32,0.12,0.48,1)),
+        ("EXPORT PROJECT ZIP", self.export_zip, (0.02,0.35,0.48,1))
+    ]:
+        b = Button(text=label, size_hint_y=None, height=dp(48),
+                   background_normal="", background_color=color)
+        b.bind(on_release=lambda instance, cb=callback:
+               (popup.dismiss(), cb()))
+        items.add_widget(b)
+
+    items.add_widget(Label(text="[b]3D OBJECT CONTROLS[/b]",
+        markup=True, size_hint_y=None, height=dp(35),
+        color=(0,0.85,1,1)))
+
+    self.three_d_widget = ThreeDCanvasWidget(
+        self.threed_engine, size_hint_y=None, height=dp(190))
+    items.add_widget(self.three_d_widget)
+
+    controls = BoxLayout(size_hint_y=None, height=dp(45), spacing=dp(6))
+    for label, callback in [
+        ("Rotate X",lambda *_:self.rotate_mesh(15,0,0)),
+        ("Rotate Y",lambda *_:self.rotate_mesh(0,15,0)),
+        ("Cube / Pyramid",self.toggle_shape)
+    ]:
+        b = Button(text=label, font_size="10sp",
+            background_normal="", background_color=(0.035,0.16,0.25,1))
+        b.bind(on_release=callback)
+        controls.add_widget(b)
+    items.add_widget(controls)
+
+    scroll.add_widget(items)
+    content.add_widget(scroll)
+
+    close = Button(text="CLOSE MENU", size_hint_y=None,
+        height=dp(44), background_normal="",
+        background_color=(0.18,0.22,0.32,1))
+    close.bind(on_release=popup.dismiss)
+    content.add_widget(close)
+    popup.open()
 
     def add_bubble(self, message, sender="Laiba", save=True):
         message = str(message)
