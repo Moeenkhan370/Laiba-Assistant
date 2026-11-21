@@ -19,6 +19,7 @@ class AndroidMediaBridge:
         self.camera_output_uri = None
         self.tts = None
         self.tts_ready = False
+        self.tts_init_failed = False
         self.pending_speech = None
         self.tts_listener = None
         self.tts_progress_listener = None
@@ -87,32 +88,41 @@ class AndroidMediaBridge:
                     try:
                         TTS = autoclass("android.speech.tts.TextToSpeech")
                         if status != TTS.SUCCESS:
+                            bridge.tts_init_failed = True
+                            bridge.pending_speech = None
                             print("LAIBA_TTS_INIT_FAILED:", status, flush=True)
                             bridge._tts_state("error")
                             return
 
                         Locale = autoclass("java.util.Locale")
-                        result = bridge.tts.setLanguage(Locale("ur", "PK"))
+                        language_options = [
+                            ("ur-PK", Locale("ur", "PK")),
+                            ("device-default", Locale.getDefault()),
+                            ("en-US", Locale("en", "US"))
+                        ]
 
-                        if result >= TTS.LANG_AVAILABLE:
-                            bridge.tts_language = "ur-PK"
-                        else:
-                            print(
-                                "LAIBA_TTS_URDU_UNAVAILABLE:", result,
-                                flush=True
-                            )
-                            result = bridge.tts.setLanguage(
-                                Locale("en", "US")
-                            )
-                            if result >= TTS.LANG_AVAILABLE:
-                                bridge.tts_language = "en-US"
+                        result = TTS.LANG_NOT_SUPPORTED
+                        for language_name, language_locale in language_options:
+                            try:
+                                language_result = bridge.tts.setLanguage(
+                                    language_locale
+                                )
                                 print(
-                                    "LAIBA_TTS_FALLBACK: en-US", flush=True
+                                    "LAIBA_TTS_LANGUAGE:",
+                                    language_name, language_result, flush=True
+                                )
+                                if language_result >= TTS.LANG_AVAILABLE:
+                                    bridge.tts_language = language_name
+                                    result = language_result
+                                    break
+                            except Exception as language_exc:
+                                print(
+                                    "LAIBA_TTS_LANGUAGE_ERROR:",
+                                    language_name, repr(language_exc), flush=True
                                 )
 
-                        bridge.tts_ready = (
-                            result >= TTS.LANG_AVAILABLE
-                        )
+                        bridge.tts_ready = result >= TTS.LANG_AVAILABLE
+                        bridge.tts_init_failed = not bridge.tts_ready
 
                         if bridge.tts_ready:
                             bridge.tts_progress_listener = ProgressListener()
@@ -130,6 +140,8 @@ class AndroidMediaBridge:
                                     lambda dt: bridge.speak(pending), 0
                                 )
                         else:
+                            bridge.pending_speech = None
+                            bridge.tts_init_failed = True
                             print(
                                 "LAIBA_TTS_NO_SUPPORTED_VOICE", flush=True
                             )
@@ -138,6 +150,8 @@ class AndroidMediaBridge:
                     except Exception as exc:
                         print("LAIBA_TTS_INIT_ERROR:", repr(exc), flush=True)
                         bridge.tts_ready = False
+                        bridge.tts_init_failed = True
+                        bridge.pending_speech = None
                         bridge._tts_state("error")
 
             Activity = autoclass("org.kivy.android.PythonActivity")
@@ -149,6 +163,9 @@ class AndroidMediaBridge:
         except Exception as exc:
             print("LAIBA_NATIVE_TTS_ERROR:", repr(exc), flush=True)
             self.tts_ready = False
+            self.tts_init_failed = True
+            self.pending_speech = None
+            self._tts_state("error")
 
     def stop_speaking(self):
         self.pending_speech = None
@@ -167,17 +184,31 @@ class AndroidMediaBridge:
         try:
             from jnius import autoclass
 
+            text = str(text).strip()
+            if not text:
+                return
+
             if not self.tts or not self.tts_ready:
-                self.pending_speech = str(text)
+                if self.tts_init_failed:
+                    self.pending_speech = None
+                    print(
+                        "LAIBA_TTS_UNAVAILABLE: initialization failed",
+                        flush=True
+                    )
+                    self._tts_state("error")
+                    return
+
+                self.pending_speech = text
                 print("LAIBA_TTS_PENDING: waiting for Android TTS", flush=True)
                 return
 
             TTS = autoclass("android.speech.tts.TextToSpeech")
             result = self.tts.speak(
-                str(text), TTS.QUEUE_FLUSH, None, "laiba_reply"
+                text, TTS.QUEUE_FLUSH, None, "laiba_reply"
             )
 
             if result == TTS.ERROR:
+                self.pending_speech = None
                 print("LAIBA_TTS_SPEAK_ERROR: Android returned ERROR", flush=True)
                 self._tts_state("error")
                 return
@@ -186,6 +217,7 @@ class AndroidMediaBridge:
             self._tts_state("speaking")
 
         except Exception as exc:
+            self.pending_speech = None
             print("LAIBA_NATIVE_TTS_ERROR:", repr(exc), flush=True)
             self._tts_state("error")
 
@@ -557,14 +589,9 @@ class AndroidMediaBridge:
 
                 @java_method("(I)V")
                 def onError(self, error):
-                    self.bridge.recognition_active = False
-                    Clock.schedule_once(
-                        lambda dt: self.bridge._restart_listening()
-                        if getattr(self.bridge.app, "voice_active", False)
-                        and not getattr(self.bridge.app, "voice_muted", True)
-                        else None,
-                        1.5
-                    )
+                    bridge = self.bridge
+                    bridge.recognition_active = False
+
                     names = {
                         1: "NETWORK_TIMEOUT", 2: "NETWORK",
                         3: "AUDIO", 4: "SERVER",
@@ -572,19 +599,37 @@ class AndroidMediaBridge:
                         7: "NO_MATCH", 8: "RECOGNIZER_BUSY",
                         9: "INSUFFICIENT_PERMISSIONS"
                     }
-                    print("LAIBA_SPEECH_ERROR:", error, names.get(error, "UNKNOWN"), flush=True)
+                    print(
+                        "LAIBA_SPEECH_ERROR:",
+                        error, names.get(error, "UNKNOWN"), flush=True
+                    )
+
+                    if error == 9:
+                        return
 
                     if error == 8:
                         def recover(dt):
                             try:
-                                if self.bridge.speech_recognizer:
-                                    self.bridge.speech_recognizer.destroy()
+                                if bridge.speech_recognizer:
+                                    bridge.speech_recognizer.cancel()
+                                    bridge.speech_recognizer.destroy()
                             except Exception as exc:
-                                print("LAIBA_RECOGNIZER_RESET:", exc)
-                            self.bridge.speech_recognizer = None
-                            self.bridge.recognition_listener = None
+                                print("LAIBA_RECOGNIZER_RESET:", repr(exc), flush=True)
 
-                        Clock.schedule_once(recover, 0)
+                            bridge.speech_recognizer = None
+                            bridge.recognition_listener = None
+                            Clock.schedule_once(
+                                lambda dt: bridge._restart_listening(),
+                                0.8
+                            )
+
+                        Clock.schedule_once(recover, 0.3)
+                    else:
+                        delay = 0.8 if error in (6, 7) else 1.5
+                        Clock.schedule_once(
+                            lambda dt: bridge._restart_listening(),
+                            delay
+                        )
 
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
@@ -636,6 +681,10 @@ class AndroidMediaBridge:
             intent.putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE,
+                "ur-PK"
             )
             intent.putExtra(
                 RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
