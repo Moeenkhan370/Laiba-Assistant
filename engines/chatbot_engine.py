@@ -157,7 +157,7 @@ class ChatbotEngine:
 
             self.api_key = key
             self.model_candidates = candidates
-            self.model_name = "gemini-3-flash-preview"
+            self.model_name = ""
 
             self.api_keys = list(dict.fromkeys([key] + self.api_keys))
             CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
@@ -287,14 +287,17 @@ class ChatbotEngine:
             image = Path(image_path)
             if not image.is_file():
                 return "Image file was not found."
+
             mime, _ = mimetypes.guess_type(str(image))
             if mime not in {"image/jpeg", "image/png", "image/webp"}:
                 return "Unsupported image format. Use JPG, PNG, or WEBP."
+
             try:
                 import base64
                 image_bytes = image.read_bytes()
                 if len(image_bytes) > 20 * 1024 * 1024:
                     return "Image is too large. Maximum size is 20 MB."
+
                 parts.append({
                     "inline_data": {
                         "mime_type": mime,
@@ -304,89 +307,150 @@ class ChatbotEngine:
             except OSError as exc:
                 return "Could not read image: {}".format(exc)
 
-        try:
-            candidates = self.model_candidates
-            if not candidates:
-                candidates = self.discover_flash_models()
-                self.model_candidates = candidates
-
-            # Each configured key will be checked for its own compatible models.
-
-            history = self.chat_history[-12:]
-            contents = list(history) + [{"role": "user", "parts": parts}]
-            payload = {
-                "system_instruction": {"parts": [{
-                    "text": "You are Laiba, a helpful assistant. Understand Urdu, Roman Urdu, English, and mixed language. Never claim a device action succeeded unless it was actually executed."
-                }]},
-                "contents": contents,
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 1024
-                }
+        history = self.chat_history[-12:]
+        contents = list(history) + [{"role": "user", "parts": parts}]
+        payload = {
+            "system_instruction": {"parts": [{
+                "text": (
+                    "You are Laiba, a helpful assistant. Understand Urdu, "
+                    "Roman Urdu, English, and mixed language. Never claim "
+                    "a device action succeeded unless it was actually executed."
+                )
+            }]},
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 1024
             }
+        }
 
-            errors = []
-            api_keys = self.api_keys or ([self.api_key] if self.api_key else [])
-            primary_model = "gemini-3-flash-preview"
-            for api_key in api_keys:
-                key_models = [primary_model]
-                for model in key_models:
-                    url = "{}/models/{}:generateContent".format(
-                        self.api_base.rstrip("/"), quote(model, safe="-")
+        configured_keys = list(self.api_keys or [])
+        if self.api_key:
+            configured_keys.insert(0, self.api_key)
+        api_keys = list(dict.fromkeys(
+            str(k).strip() for k in configured_keys if str(k).strip()
+        ))
+
+        errors = []
+        discovered_union = []
+
+        for api_key in api_keys:
+            try:
+                discovered = self.discover_flash_models(api_key)
+            except Exception as exc:
+                errors.append("Model discovery: {}".format(
+                    self._redact_api_keys(exc)[:160]
+                ))
+                continue
+
+            # ListModels does not identify free-tier eligibility.
+            # Try only stable Flash models; skip preview/experimental variants.
+            # Google documented Standard Free-tier Flash models.
+            # ListModels confirms availability; this allowlist confirms
+            # the intended free-tier model family.
+            free_model_priority = [
+                "gemini-3.8-flash",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+            ]
+
+            available_set = set(discovered)
+            key_models = [
+                name for name in free_model_priority
+                if name in available_set
+            ]
+
+            for name in key_models:
+                if name not in discovered_union:
+                    discovered_union.append(name)
+
+            if not key_models:
+                errors.append("This API key has no stable Flash model available.")
+                continue
+
+            for model in key_models:
+                url = "{}/models/{}:generateContent".format(
+                    self.api_base.rstrip("/"), quote(model, safe="-")
+                )
+
+                try:
+                    response = self._request_with_retry(
+                        "POST",
+                        url,
+                        params={"key": api_key},
+                        json=payload,
+                        timeout=self.timeout
                     )
-                    try:
-                        response = self._request_with_retry(
-                            "POST", url, params={"key": api_key},
-                            json=payload, timeout=self.timeout
-                        )
-                        if not response.ok:
-                            errors.append("{}: HTTP {}".format(model, response.status_code))
-                            continue
 
-                        data = response.json()
-                        answer = "".join(
-                            p.get("text", "")
-                            for p in data.get("candidates", [{}])[0]
-                            .get("content", {}).get("parts", [])
-                        )
-                        if not answer:
-                            errors.append("{}: empty response".format(model))
-                            continue
-
-                        self.api_key = api_key
-                        self.api_keys = [api_key] + [
-                            k for k in self.api_keys if k != api_key
-                        ]
-                        self.model_name = model
-                        self.model_candidates = key_models
-                        CURRENT_CONFIG["GEMINI_API_KEY"] = api_key
-                        CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
-                        CURRENT_CONFIG["GEMINI_MODEL"] = model
-                        CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
-                        save_config(CURRENT_CONFIG)
-
-                        self.chat_history.extend([
-                            {"role": "user", "parts": parts},
-                            {"role": "model", "parts": [{"text": answer}]}
-                        ])
-                        self.chat_history = self.chat_history[-24:]
-                        self.save_chat_history()
-                        print("[LAIBA] Active Gemini model:", model)
-                        return answer
-
-                    except requests.RequestException as exc:
-                        errors.append("{}: {}".format(model, self._redact_api_keys(exc)[:120]))
-                        continue
-                    except (ValueError, KeyError, IndexError) as exc:
-                        errors.append("{}: invalid response".format(model))
+                    if not response.ok:
+                        detail = self._safe_error(response)
+                        errors.append("{} HTTP {}: {}".format(
+                            model, response.status_code, detail[:180]
+                        ))
+                        response.close()
                         continue
 
-            return "All Gemini API keys and Flash models failed. " + "; ".join(errors[:8])
+                    data = response.json()
+                    response.close()
 
-        except requests.RequestException as exc:
-            return "Gemini network/discovery error: {}".format(
-                self._redact_api_keys(exc)
-            )
+                    candidates = data.get("candidates") or []
+                    if not candidates:
+                        errors.append("{}: no response candidate".format(model))
+                        continue
+
+                    answer = "".join(
+                        part.get("text", "")
+                        for part in candidates[0].get("content", {}).get("parts", [])
+                        if isinstance(part, dict)
+                    ).strip()
+
+                    if not answer:
+                        errors.append("{}: empty response".format(model))
+                        continue
+
+                    self.api_key = api_key
+                    self.api_keys = [api_key] + [
+                        key for key in self.api_keys if key != api_key
+                    ]
+                    self.model_name = model
+                    self.model_candidates = key_models
+
+                    CURRENT_CONFIG["GEMINI_API_KEY"] = api_key
+                    CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
+                    CURRENT_CONFIG["GEMINI_MODEL"] = model
+                    CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
+                    save_config(CURRENT_CONFIG)
+
+                    self.chat_history.extend([
+                        {"role": "user", "parts": parts},
+                        {"role": "model", "parts": [{"text": answer}]}
+                    ])
+                    self.chat_history = self.chat_history[-24:]
+                    self.save_chat_history()
+
+                    print("[LAIBA] AUTO_SELECTED_FLASH_MODEL:", model)
+                    return answer
+
+                except requests.RequestException as exc:
+                    errors.append("{}: {}".format(
+                        model, self._redact_api_keys(exc)[:160]
+                    ))
+                    continue
+                except (ValueError, KeyError, IndexError, TypeError) as exc:
+                    errors.append("{}: invalid response ({})".format(
+                        model, type(exc).__name__
+                    ))
+                    continue
+
+        self.model_candidates = discovered_union
+        if discovered_union:
+            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = discovered_union
+
+        return "All discovered stable Flash models failed. " + "; ".join(errors[:10])
 
     def process_message(self, user_text, image_path=None):
         text = str(user_text or "").strip()
