@@ -980,6 +980,27 @@ class LaibaKivyApp(App):
             CURRENT_CONFIG.update(old_config)
             status.text = "Delete failed: " + str(exc)[:180]
 
+    def on_pause(self):
+        try:
+            self.media_bridge.stop_listening()
+            self.media_bridge.stop_speaking()
+        except Exception as exc:
+            print(f"[Laiba] Pause cleanup: {exc}")
+        return True
+
+    def on_resume(self):
+        try:
+            if getattr(self, "voice_active", False) and not getattr(self, "voice_processing", False):
+                Clock.schedule_once(lambda dt: self.media_bridge._restart_listening(), 0.7)
+        except Exception as exc:
+            print(f"[Laiba] Resume voice restart: {exc}")
+
+    def on_stop(self):
+        try:
+            self.media_bridge.shutdown()
+        except Exception as exc:
+            print(f"[Laiba] Media shutdown: {exc}")
+
     def export_zip(self, instance):
         try:
             result = self.chatbot.export_project_zip()
