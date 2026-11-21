@@ -25,6 +25,7 @@ from android_media import AndroidMediaBridge
 
 # Set Window dark background
 Window.clearcolor = (0, 0, 0, 1)
+Window.softinput_mode = 'resize'
 
 
 
@@ -33,46 +34,6 @@ from kivy.clock import Clock
 from kivy.metrics import dp
 from kivy.uix.widget import Widget
 from kivy.graphics import RoundedRectangle
-
-
-class ChatBubble(BoxLayout):
-    def __init__(self, message, sender="Laiba", **kwargs):
-        super().__init__(
-            orientation="vertical",
-            size_hint_y=None,
-            padding=(dp(13), dp(9)),
-            spacing=dp(4),
-            **kwargs
-        )
-        self.size_hint_x = 0.86
-        self.bind(minimum_height=self.setter("height"))
-
-        is_user = sender == "You"
-        bg = (0.0, 0.38, 0.42, 1) if is_user else (0.075, 0.12, 0.20, 1)
-        fg = (0.75, 1, 1, 1) if is_user else (0.94, 0.97, 1, 1)
-
-        with self.canvas.before:
-            Color(*bg)
-            self.panel = RoundedRectangle(
-                pos=self.pos, size=self.size, radius=[dp(15)]
-            )
-        self.bind(pos=self._update_panel, size=self._update_panel)
-
-        label = Label(
-            text=message,
-            color=fg,
-            halign="left",
-            valign="middle",
-            font_size="15sp",
-            size_hint_y=None,
-            text_size=(Window.width * 0.70, None)
-        )
-        label.bind(texture_size=lambda obj, size: setattr(obj, "height", size[1] + dp(8)))
-        self.add_widget(label)
-
-    def _update_panel(self, *args):
-        self.panel.pos = self.pos
-        self.panel.size = self.size
 
 
 class ThreeDCanvasWidget(BoxLayout):
@@ -301,6 +262,7 @@ class LaibaKivyApp(App):
     def build_main_screen(self):
         self.title = "Laiba AI Assistant"
         root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(7))
+        root.bind(size=lambda *_: Clock.schedule_once(self._scroll_chat_to_bottom, 0.15))
 
         with root.canvas.before:
             Color(0.008, 0.018, 0.045, 1)
@@ -327,8 +289,8 @@ class LaibaKivyApp(App):
 
         self.chat_scroll = ScrollView(do_scroll_x=False, bar_width=dp(3))
         self.message_list = BoxLayout(
-            orientation="vertical", size_hint_y=None,
-            spacing=dp(9), padding=(dp(3),dp(8)))
+            orientation="vertical", size_hint=(1, None),
+            spacing=dp(12), padding=(dp(5), dp(10)))
         self.message_list.bind(
             minimum_height=self.message_list.setter("height"))
         self.chat_scroll.add_widget(self.message_list)
@@ -375,6 +337,7 @@ class LaibaKivyApp(App):
             hint_text_color=(0.5,0.68,0.78,1),
             padding=(dp(12),dp(12)))
         self.user_input.bind(on_text_validate=self.send_message)
+        self.user_input.bind(focus=self._on_chat_input_focus)
         composer.add_widget(self.user_input)
 
         send = Button(text="➤", size_hint_x=None, width=dp(52),
@@ -444,30 +407,50 @@ class LaibaKivyApp(App):
         content.add_widget(close)
         popup.open()
 
+    def _scroll_chat_to_bottom(self, *args):
+        if not hasattr(self, "chat_scroll"):
+            return
+        self.chat_scroll.scroll_y = 0
+
+    def _on_chat_input_focus(self, instance, focused):
+        if focused:
+            Clock.schedule_once(self._scroll_chat_to_bottom, 0.15)
+            Clock.schedule_once(self._scroll_chat_to_bottom, 0.45)
+
     def add_bubble(self, message, sender="Laiba", save=True):
         message = str(message)
-        row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            spacing=dp(4)
-        )
-        bubble = ChatBubble(message, sender=sender)
-        bubble.bind(minimum_height=row.setter("height"))
 
-        if sender == "You":
-            row.add_widget(Widget())
-            row.add_widget(bubble)
-        else:
-            row.add_widget(bubble)
-            row.add_widget(Widget())
-
-        self.message_list.add_widget(row)
-        Clock.schedule_once(
-            lambda dt: setattr(self.chat_scroll, "scroll_y", 0), 0.1
+        label = Label(
+            text=("YOU\\n" if sender == "You" else "LAIBA\\n") + message,
+            color=(0.45, 0.95, 1, 1) if sender == "You"
+                  else (0.94, 0.97, 1, 1),
+            font_size="15sp",
+            halign="left",
+            valign="top",
+            size_hint=(1, None),
+            text_size=(max(1, self.message_list.width - dp(20)), None),
+            padding=(dp(8), dp(5))
         )
+
+        def update_width(instance, width):
+            instance.text_size = (max(1, width - dp(20)), None)
+
+        label.bind(width=update_width)
+        label.bind(
+            texture_size=lambda obj, size:
+                setattr(obj, "height", size[1] + dp(12))
+        )
+
+        self.message_list.add_widget(label)
+
+        Clock.schedule_once(self._scroll_chat_to_bottom, 0.1)
+        Clock.schedule_once(self._scroll_chat_to_bottom, 0.3)
 
         if save:
-            self.chat_history.append({"sender": sender, "text": message})
+            self.chat_history.append({
+                "sender": sender,
+                "text": message
+            })
             self.save_history()
 
     def check_network(self):
