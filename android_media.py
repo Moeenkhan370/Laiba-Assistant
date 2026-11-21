@@ -277,6 +277,9 @@ class AndroidMediaBridge:
                         callback()
                     else:
                         print("LAIBA_MIC_PERMISSION: DENIED", details, flush=True)
+                        self._voice_state(
+                            "error", "Microphone permission denied: " + details
+                        )
                         self.message(
                             "Android permission denied: " + details
                         )
@@ -288,6 +291,7 @@ class AndroidMediaBridge:
             request_permissions(names, result)
         except Exception as exc:
             print("LAIBA_PERMISSION_EXCEPTION:", repr(exc), flush=True)
+            self._voice_state("error", "Android permission error: " + str(exc))
             self.message("Android permission error: " + str(exc))
 
     CAMERA_CODE = 7315
@@ -532,8 +536,19 @@ class AndroidMediaBridge:
         activity.bind(on_activity_result=self._activity_result)
         self.activity_bound = True
 
+    def _voice_state(self, state, detail=""):
+        print(
+            "LAIBA_VOICE_STATE:", state, str(detail), flush=True
+        )
+        callback = getattr(self.app, "on_voice_bridge_state", None)
+        if callable(callback):
+            Clock.schedule_once(
+                lambda dt: callback(state, str(detail)), 0
+            )
+
     def microphone(self):
         print("LAIBA_MIC_BUTTON: pressed", flush=True)
+        self._voice_state("permission", "Requesting microphone permission...")
         self.permissions(
             ["android.permission.RECORD_AUDIO"],
             self._start_speech
@@ -567,10 +582,16 @@ class AndroidMediaBridge:
                 @java_method("(Landroid/os/Bundle;)V")
                 def onReadyForSpeech(self, params):
                     print("LAIBA_SPEECH: ready for speech", flush=True)
+                    self.bridge._voice_state(
+                        "ready", "Microphone is ready. Speak now."
+                    )
 
                 @java_method("()V")
                 def onBeginningOfSpeech(self):
                     print("LAIBA_SPEECH: speech detected", flush=True)
+                    self.bridge._voice_state(
+                        "hearing", "I can hear you. Processing your speech..."
+                    )
                     Clock.schedule_once(
                         lambda dt: self.bridge.stop_speaking(), 0
                     )
@@ -605,7 +626,23 @@ class AndroidMediaBridge:
                     )
 
                     if error == 9:
+                        bridge._voice_state(
+                            "error",
+                            "Microphone permission is missing. Allow microphone access in Android settings."
+                        )
                         return
+
+                    if error in (6, 7):
+                        bridge._voice_state(
+                            "no_match",
+                            "No speech was detected. Please speak clearly."
+                        )
+                    else:
+                        bridge._voice_state(
+                            "retrying",
+                            "Speech recognition error: " +
+                            names.get(error, "UNKNOWN")
+                        )
 
                     if error == 8:
                         def recover(dt):
@@ -640,12 +677,26 @@ class AndroidMediaBridge:
                             SpeechRecognizer.RESULTS_RECOGNITION
                         )
                         if matches and matches.size() > 0:
-                            text = str(matches.get(0))
-                            print("LAIBA_SPEECH_RESULT:", text)
-                            Clock.schedule_once(
-                                lambda dt: self.bridge.app.send_voice_transcript(text), 0
-                            )
+                            text = str(matches.get(0)).strip()
+                            print("LAIBA_SPEECH_RESULT:", text, flush=True)
+                            if text:
+                                self.bridge._voice_state(
+                                    "processing", "Speech recognized. Preparing reply..."
+                                )
+                                Clock.schedule_once(
+                                    lambda dt: self.bridge.app.send_voice_transcript(text), 0
+                                )
+                            else:
+                                self.bridge._voice_state(
+                                    "no_match", "No speech text was returned. Please try again."
+                                )
+                                Clock.schedule_once(
+                                    lambda dt: self.bridge._restart_listening(), 0.7
+                                )
                         else:
+                            self.bridge._voice_state(
+                                "no_match", "Speech was not recognized. Please try again."
+                            )
                             Clock.schedule_once(
                                 lambda dt: self.bridge._restart_listening(), 0.7
                             )
@@ -669,8 +720,20 @@ class AndroidMediaBridge:
             RecognizerIntent = autoclass("android.speech.RecognizerIntent")
 
             activity = PythonActivity.mActivity
+            self._voice_state("starting", "Starting Android speech recognition...")
+
+            if not SpeechRecognizer.isRecognitionAvailable(activity):
+                raise RuntimeError(
+                    "No Android speech recognition service is installed or enabled."
+                )
+
             if self.speech_recognizer is None:
                 self.speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
+
+            if self.speech_recognizer is None:
+                raise RuntimeError(
+                    "Android could not create the speech recognizer."
+                )
 
             if self.recognition_listener is None:
                 self.recognition_listener = Listener(self)
@@ -686,18 +749,6 @@ class AndroidMediaBridge:
                 RecognizerIntent.EXTRA_LANGUAGE,
                 "ur-PK"
             )
-            intent.putExtra(
-                RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
-                RecognizerIntent.LANGUAGE_SWITCH_BALANCED
-            )
-            from java.util import ArrayList
-            languages = ArrayList()
-            languages.add("ur-PK")
-            languages.add("en-US")
-            intent.putStringArrayListExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
-                languages
-            )
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
 
             if not self.recognition_active:
@@ -707,7 +758,10 @@ class AndroidMediaBridge:
 
         except Exception as exc:
             self.recognition_active = False
-            print("LAIBA_SPEECH_INIT_ERROR:", exc)
+            print("LAIBA_SPEECH_INIT_ERROR:", repr(exc), flush=True)
+            self._voice_state(
+                "error", "Speech recognizer could not start: " + str(exc)
+            )
 
     def stop_listening(self):
         try:

@@ -668,9 +668,9 @@ class LaibaKivyApp(App):
         self.voice_active = True
         self.voice_muted = False
         self.voice_processing = False
-        self.voice_status.text = "Listening..."
-        self.voice_hint.text = "I'm listening. Speak in Urdu or English."
-        self.voice_orb.set_state("listening")
+        self.voice_status.text = "Starting microphone..."
+        self.voice_hint.text = "Connecting to Android speech recognition..."
+        self.voice_orb.set_state("ready")
         self.voice_start_button.disabled = True
         self.voice_mic_button.disabled = False
         self.voice_mic_button.text = "MIC ON"
@@ -785,6 +785,52 @@ class LaibaKivyApp(App):
             )
 
         Thread(target=worker, daemon=True).start()
+
+    def on_voice_bridge_state(self, state, detail=""):
+        if not getattr(self, "voice_active", False):
+            return
+
+        if state == "permission":
+            self.voice_status.text = "Requesting microphone..."
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("ready")
+
+        elif state == "starting":
+            self.voice_status.text = "Starting microphone..."
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("ready")
+
+        elif state == "ready":
+            self.voice_status.text = "Listening..."
+            self.voice_hint.text = "Microphone ready. Speak in Urdu or English."
+            self.voice_orb.set_state("listening")
+
+        elif state == "hearing":
+            self.voice_status.text = "Hearing you..."
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("listening")
+
+        elif state == "processing":
+            self.voice_status.text = "Recognizing your words..."
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("ready")
+
+        elif state == "no_match":
+            self.voice_status.text = "Didn't catch that"
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("ready")
+
+        elif state == "retrying":
+            self.voice_status.text = "Reconnecting microphone..."
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("ready")
+
+        elif state == "error":
+            self.voice_muted = True
+            self.voice_status.text = "Microphone unavailable"
+            self.voice_hint.text = detail
+            self.voice_orb.set_state("ready")
+            self.voice_mic_button.text = "RETRY MIC"
 
     def on_tts_state(self, state):
         if not getattr(self, "voice_active", False):
