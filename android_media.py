@@ -109,6 +109,7 @@ class AndroidMediaBridge:
 
     def stop_speaking(self):
         self.is_speaking = False
+        self.pending_speech = None
         try:
             if self.edge_player:
                 self.edge_player.stop()
@@ -475,6 +476,14 @@ class AndroidMediaBridge:
         )
 
     def _start_speech(self):
+        app = self.app
+        if getattr(app, "voice_active", False):
+            if (
+                getattr(app, "voice_muted", True)
+                or getattr(app, "voice_processing", False)
+                or self.is_speaking
+            ):
+                return
         Clock.schedule_once(lambda dt: self._init_and_listen_ui_thread(), 0)
 
     def _init_and_listen_ui_thread(self):
@@ -517,7 +526,6 @@ class AndroidMediaBridge:
                 @java_method("(I)V")
                 def onError(self, error):
                     self.bridge.recognition_active = False
-                    Clock.schedule_once(lambda dt: self.bridge._tts_state("error"), 0)
                     Clock.schedule_once(
                         lambda dt: self.bridge._restart_listening()
                         if getattr(self.bridge.app, "voice_active", False)
@@ -549,7 +557,6 @@ class AndroidMediaBridge:
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
                     self.bridge.recognition_active = False
-                    Clock.schedule_once(lambda dt: self.bridge._tts_state("done"), 0)
                     try:
                         SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
                         matches = results.getStringArrayList(
@@ -560,6 +567,10 @@ class AndroidMediaBridge:
                             print("LAIBA_SPEECH_RESULT:", text)
                             Clock.schedule_once(
                                 lambda dt: self.bridge.app.send_voice_transcript(text), 0
+                            )
+                        else:
+                            Clock.schedule_once(
+                                lambda dt: self.bridge._restart_listening(), 0.7
                             )
                     except Exception as exc:
                         print("LAIBA_SPEECH_RESULTS_ERROR:", exc)
@@ -623,7 +634,15 @@ class AndroidMediaBridge:
             print("LAIBA_SPEECH_STOP:", exc)
 
     def _restart_listening(self):
-        if not self.recognition_active:
+        app = self.app
+        if (
+            getattr(app, "voice_active", False)
+            and not getattr(app, "voice_muted", True)
+            and not getattr(app, "voice_processing", False)
+            and not self.is_speaking
+            and not getattr(self, "pending_speech", None)
+            and not self.recognition_active
+        ):
             self._start_speech()
 
     def live_camera(self):

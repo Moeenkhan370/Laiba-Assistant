@@ -520,6 +520,7 @@ class LaibaKivyApp(App):
     def open_voice_mode(self, *args):
         self.voice_active = False
         self.voice_muted = False
+        self.voice_processing = False
         screen = BoxLayout(
             orientation="vertical",
             padding=dp(22),
@@ -613,6 +614,7 @@ class LaibaKivyApp(App):
             return
         self.voice_active = True
         self.voice_muted = False
+        self.voice_processing = False
         self.voice_status.text = "Listening..."
         self.voice_hint.text = "I'm listening. Speak in Urdu or English."
         self.voice_orb.set_state("listening")
@@ -627,9 +629,16 @@ class LaibaKivyApp(App):
         if self.voice_muted:
             self.voice_muted = False
             self.voice_mic_button.text = "MIC ON"
-            self.voice_status.text = "Listening..."
-            self.voice_orb.set_state("listening")
-            self.media_bridge.microphone()
+            if self.voice_processing or self.media_bridge.is_speaking:
+                self.voice_status.text = "Laiba is finishing her reply..."
+                self.voice_orb.set_state(
+                    "speaking" if self.media_bridge.is_speaking else "ready"
+                )
+                self.voice_hint.text = "Listening will resume after the reply."
+            else:
+                self.voice_status.text = "Listening..."
+                self.voice_orb.set_state("listening")
+                self.media_bridge.microphone()
         else:
             self.voice_muted = True
             self.voice_mic_button.text = "MIC OFF"
@@ -640,6 +649,7 @@ class LaibaKivyApp(App):
     def end_voice_call(self, *args):
         self.voice_active = False
         self.voice_muted = True
+        self.voice_processing = False
         self.media_bridge.stop_listening()
         self.media_bridge.stop_speaking()
         self.close_voice_mode()
@@ -647,6 +657,7 @@ class LaibaKivyApp(App):
     def close_voice_mode(self, *args):
         self.voice_active = False
         self.voice_muted = True
+        self.voice_processing = False
         self.media_bridge.stop_listening()
         self.media_bridge.stop_speaking()
         self.root.clear_widgets()
@@ -695,6 +706,12 @@ class LaibaKivyApp(App):
         if not text:
             return
 
+        if getattr(self, "voice_active", False):
+            self.voice_processing = True
+            self.voice_status.text = "Laiba is thinking..."
+            self.voice_orb.set_state("ready")
+            self.voice_hint.text = "Preparing your answer..."
+
         self.add_bubble(text, "You")
         thinking = Label(
             text="Laiba is thinking...",
@@ -723,16 +740,24 @@ class LaibaKivyApp(App):
         if state == "speaking":
             self.voice_status.text = "Laiba is speaking..."
             self.voice_orb.set_state("speaking")
-            self.voice_hint.text = "You can interrupt Laiba by speaking."
+            self.voice_hint.text = "I'll listen again when my reply is complete."
 
         elif state in ("done", "error"):
-            if self.voice_active and not self.voice_muted:
+            if (
+                self.voice_active
+                and not self.voice_muted
+                and not self.voice_processing
+            ):
                 self.voice_status.text = "Listening..."
                 self.voice_orb.set_state("listening")
                 self.voice_hint.text = "I'm listening. Speak now."
                 Clock.schedule_once(
                     lambda dt: self.media_bridge._restart_listening()
-                    if self.voice_active and not self.voice_muted else None,
+                    if (
+                        self.voice_active
+                        and not self.voice_muted
+                        and not self.voice_processing
+                    ) else None,
                     0.5
                 )
 
@@ -741,6 +766,7 @@ class LaibaKivyApp(App):
             thinking.parent.remove_widget(thinking)
         self.add_bubble(str(result), "Laiba")
         if getattr(self, "voice_active", False):
+            self.voice_processing = False
             self.voice_status.text = "Laiba is replying..."
         self.media_bridge.speak(str(result))
 
