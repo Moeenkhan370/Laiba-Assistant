@@ -330,6 +330,7 @@ class AndroidMediaBridge:
         except Exception as exc:
             self.pending_speech = None
             self._tts_last_utterance_id = None
+            self.is_speaking = False
             print("LAIBA_NATIVE_TTS_ERROR:", repr(exc), flush=True)
             self._tts_state("error")
 

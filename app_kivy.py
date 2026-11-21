@@ -863,7 +863,19 @@ class LaibaKivyApp(App):
             self.voice_processing = False
             self.voice_status.text = "Laiba voice playback failed"
             self.voice_orb.set_state("ready")
-            self.voice_hint.text = "TTS error. Check LAIBA_TTS logs. Tap MIC to retry."
+            self.voice_hint.text = "Voice playback failed. Returning to listening..."
+            if not self.voice_muted:
+                Clock.schedule_once(
+                    lambda dt: self.media_bridge._restart_listening()
+                    if (
+                        self.voice_active
+                        and not self.voice_muted
+                        and not self.voice_processing
+                        and not self.media_bridge.is_speaking
+                        and not self.media_bridge.pending_speech
+                    ) else None,
+                    1.0
+                )
 
     def finish_reply(self, result, thinking):
         if thinking.parent:
