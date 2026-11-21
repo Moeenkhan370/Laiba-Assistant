@@ -134,6 +134,24 @@ class AndroidMediaBridge:
                                 "LAIBA_TTS_READY:",
                                 bridge.tts_language, flush=True
                             )
+                            try:
+                                print(
+                                    "LAIBA_TTS_ENGINE:",
+                                    bridge.tts.getDefaultEngine(), flush=True
+                                )
+                                voice = bridge.tts.getVoice()
+                                if voice:
+                                    print(
+                                        "LAIBA_TTS_SELECTED_VOICE:",
+                                        str(voice.getName()),
+                                        str(voice.getLocale().toLanguageTag()),
+                                        flush=True
+                                    )
+                            except Exception as voice_exc:
+                                print(
+                                    "LAIBA_TTS_VOICE_INFO_ERROR:",
+                                    repr(voice_exc), flush=True
+                                )
                             pending = bridge.pending_speech
                             bridge.pending_speech = None
                             if pending:
@@ -204,9 +222,16 @@ class AndroidMediaBridge:
                 return
 
             TTS = autoclass("android.speech.tts.TextToSpeech")
+            print(
+                "LAIBA_TTS_SPEAK_REQUEST:",
+                "characters=", len(text),
+                "language=", self.tts_language,
+                flush=True
+            )
             result = self.tts.speak(
                 text, TTS.QUEUE_FLUSH, None, "laiba_reply"
             )
+            print("LAIBA_TTS_SPEAK_RESULT:", result, flush=True)
 
             if result == TTS.ERROR:
                 self.pending_speech = None
@@ -223,6 +248,7 @@ class AndroidMediaBridge:
             self._tts_state("error")
 
     def _tts_state(self, state):
+        print("LAIBA_TTS_STATE:", state, flush=True)
         self.is_speaking = (state == "speaking")
         callback = getattr(self.app, "on_tts_state", None)
         if callback:
