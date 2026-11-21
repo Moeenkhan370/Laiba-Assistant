@@ -17,6 +17,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle, Line, Ellipse
 from kivy.core.window import Window
+from kivy.core.clipboard import Clipboard
 
 from config import CURRENT_CONFIG
 from engines.chatbot_engine import ChatbotEngine
@@ -316,10 +317,10 @@ class LaibaKivyApp(App):
 
         media = BoxLayout(size_hint_y=None, height=dp(37), spacing=dp(6))
         for name, callback in [
-            ("Camera",self.open_camera),
-            ("Gallery",self.open_gallery),
-            ("Live",self.open_live_camera),
-            ("Mic",self.open_microphone)
+            ("📷",self.open_camera),
+            ("▧",self.open_gallery),
+            ("◉",self.open_live_camera),
+            ("🎙",self.open_microphone)
         ]:
             b = Button(text=name, font_size="11sp",
                 background_normal="", background_color=(0.025,0.23,0.32,1),
@@ -417,8 +418,32 @@ class LaibaKivyApp(App):
             Clock.schedule_once(self._scroll_chat_to_bottom, 0.15)
             Clock.schedule_once(self._scroll_chat_to_bottom, 0.45)
 
+    def copy_message(self, text, *args):
+        try:
+            Clipboard.copy(str(text))
+            self.show_copy_status("Copied to clipboard")
+        except Exception as exc:
+            self.show_copy_status("Copy failed: " + str(exc))
+
+    def show_copy_status(self, message):
+        try:
+            if hasattr(self, "network_label"):
+                self.network_label.text = message
+                Clock.schedule_once(
+                    lambda dt: self.check_network(), 1.8
+                )
+        except Exception:
+            pass
+
     def add_bubble(self, message, sender="Laiba", save=True):
         message = str(message)
+
+        row = BoxLayout(
+            orientation="horizontal",
+            size_hint=(1, None),
+            spacing=dp(5),
+            padding=(dp(2), dp(2))
+        )
 
         label = Label(
             text=("YOU\\n" if sender == "You" else "LAIBA\\n") + message,
@@ -428,21 +453,38 @@ class LaibaKivyApp(App):
             halign="left",
             valign="top",
             size_hint=(1, None),
-            text_size=(max(1, self.message_list.width - dp(20)), None),
+            text_size=(None, None),
             padding=(dp(8), dp(5))
         )
 
-        def update_width(instance, width):
-            instance.text_size = (max(1, width - dp(20)), None)
-
-        label.bind(width=update_width)
-        label.bind(
-            texture_size=lambda obj, size:
-                setattr(obj, "height", size[1] + dp(12))
+        copy_btn = Button(
+            text="COPY",
+            size_hint=(None, None),
+            size=(dp(52), dp(32)),
+            font_size="10sp",
+            background_normal="",
+            background_color=(0.025, 0.23, 0.32, 1),
+            color=(0.4, 0.95, 1, 1)
+        )
+        copy_btn.bind(
+            on_release=lambda instance, value=message:
+                self.copy_message(value)
         )
 
-        self.message_list.add_widget(label)
+        row.add_widget(label)
+        row.add_widget(copy_btn)
 
+        def update_layout(*args):
+            available = max(dp(80), row.width - dp(65))
+            label.text_size = (available - dp(16), None)
+            label.texture_update()
+            label.height = label.texture_size[1] + dp(12)
+            row.height = max(label.height, dp(36))
+
+        row.bind(width=lambda *_: update_layout())
+        label.bind(texture_size=lambda *_: update_layout())
+        self.message_list.add_widget(row)
+        Clock.schedule_once(lambda dt: update_layout(), 0)
         Clock.schedule_once(self._scroll_chat_to_bottom, 0.1)
         Clock.schedule_once(self._scroll_chat_to_bottom, 0.3)
 
