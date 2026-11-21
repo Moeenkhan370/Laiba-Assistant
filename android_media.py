@@ -495,8 +495,6 @@ class AndroidMediaBridge:
             AudioManager = autoclass(
                 "android.media.AudioManager"
             )
-            Bundle = autoclass("android.os.Bundle")
-
             if self.tts_audio_manager is not None:
                 try:
                     self.tts_audio_manager.setMode(
@@ -532,13 +530,6 @@ class AndroidMediaBridge:
             )
 
             for index, chunk in enumerate(chunks):
-                params = Bundle()
-                params.putInt(
-                    "streamType",
-                    AudioManager.STREAM_MUSIC
-                )
-                params.putFloat("volume", 1.0)
-
                 queue_mode = (
                     TTS.QUEUE_FLUSH
                     if index == 0
@@ -547,10 +538,12 @@ class AndroidMediaBridge:
 
                 utterance_id = "laiba_reply_" + str(index)
 
+                # Let Android TTS use its native engine audio routing.
+                # Avoid passing legacy stream/volume Bundle parameters.
                 result = self.tts.speak(
                     chunk,
                     queue_mode,
-                    params,
+                    None,
                     utterance_id
                 )
 
