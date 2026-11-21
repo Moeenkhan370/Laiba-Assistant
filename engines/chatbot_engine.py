@@ -24,6 +24,8 @@ class ChatbotEngine:
             self.api_keys.insert(0, self.api_key)
         self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "")
         self.model_candidates = CURRENT_CONFIG.get("GEMINI_MODEL_CANDIDATES", [])
+        self._model_cache = {}
+        self._active_model_key = self.api_key
         self.api_base = CURRENT_CONFIG.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
         self.timeout = int(CURRENT_CONFIG.get("GEMINI_TIMEOUT", 30))
         self.is_speaking = False
@@ -157,6 +159,8 @@ class ChatbotEngine:
 
             self.api_key = key
             self.model_candidates = candidates
+            self._model_cache[key] = list(candidates)
+            self._active_model_key = key
             self.model_name = ""
 
             self.api_keys = list(dict.fromkeys([key] + self.api_keys))
@@ -297,7 +301,6 @@ class ChatbotEngine:
                 image_bytes = image.read_bytes()
                 if len(image_bytes) > 20 * 1024 * 1024:
                     return "Image is too large. Maximum size is 20 MB."
-
                 parts.append({
                     "inline_data": {
                         "mime_type": mime,
@@ -307,8 +310,9 @@ class ChatbotEngine:
             except OSError as exc:
                 return "Could not read image: {}".format(exc)
 
-        history = self.chat_history[-12:]
-        contents = list(history) + [{"role": "user", "parts": parts}]
+        contents = list(self.chat_history[-12:]) + [
+            {"role": "user", "parts": parts}
+        ]
         payload = {
             "system_instruction": {"parts": [{
                 "text": (
@@ -324,133 +328,173 @@ class ChatbotEngine:
             }
         }
 
+        active_key = self.api_key
+        active_model = self.model_name
         configured_keys = list(self.api_keys or [])
-        if self.api_key:
-            configured_keys.insert(0, self.api_key)
+        if active_key:
+            configured_keys.insert(0, active_key)
         api_keys = list(dict.fromkeys(
             str(k).strip() for k in configured_keys if str(k).strip()
         ))
 
+        free_model_priority = [
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ]
+
         errors = []
         discovered_union = []
+        switched_model = False
 
         for api_key in api_keys:
             try:
-                discovered = self.discover_flash_models(api_key)
+                # Discover once per API key per app session; reuse the cache.
+                discovered = self._model_cache.get(api_key)
+                if discovered is None:
+                    discovered = self.discover_flash_models(api_key)
+                    self._model_cache[api_key] = list(discovered)
+
+                available = set(discovered)
+                key_models = [
+                    name for name in free_model_priority if name in available
+                ]
+
+                for name in key_models:
+                    if name not in discovered_union:
+                        discovered_union.append(name)
+
+                if not key_models:
+                    errors.append("No supported stable Flash model for an API key.")
+                    continue
+
+                # Keep using the selected model first. Only try another model
+                # after this one actually fails.
+                if api_key == active_key and active_model in key_models:
+                    ordered_models = [active_model] + [
+                        name for name in key_models if name != active_model
+                    ]
+                else:
+                    ordered_models = list(key_models)
+
+                for model in ordered_models:
+                    url = "{}/models/{}:generateContent".format(
+                        self.api_base.rstrip("/"), quote(model, safe="-")
+                    )
+
+                    try:
+                        # One request per model: do not waste time retrying a
+                        # quota-exhausted model before moving to the fallback.
+                        response = self.session.post(
+                            url,
+                            params={"key": api_key},
+                            json=payload,
+                            timeout=self.timeout
+                        )
+
+                        if not response.ok:
+                            status = response.status_code
+                            detail = self._safe_error(response)
+                            response.close()
+                            errors.append("{} HTTP {}: {}".format(
+                                model, status, detail[:140]
+                            ))
+
+                            # Quota/server/model availability errors allow
+                            # failover. Auth and malformed-request errors do
+                            # not justify cycling through every model.
+                            if status in (429, 500, 502, 503, 504, 404):
+                                continue
+                            break
+
+                        data = response.json()
+                        response.close()
+
+                        candidates = data.get("candidates") or []
+                        if not candidates:
+                            errors.append("{}: no response candidate".format(model))
+                            continue
+
+                        answer = "".join(
+                            part.get("text", "")
+                            for part in candidates[0].get("content", {}).get("parts", [])
+                            if isinstance(part, dict)
+                        ).strip()
+
+                        if not answer:
+                            errors.append("{}: empty response".format(model))
+                            continue
+
+                        switched_model = bool(
+                            active_model and
+                            api_key == active_key and
+                            model != active_model
+                        )
+
+                        self.api_key = api_key
+                        self.api_keys = [api_key] + [
+                            key for key in self.api_keys if key != api_key
+                        ]
+                        self.model_name = model
+                        self.model_candidates = key_models
+                        self._active_model_key = api_key
+
+                        CURRENT_CONFIG["GEMINI_API_KEY"] = api_key
+                        CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
+                        CURRENT_CONFIG["GEMINI_MODEL"] = model
+                        CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
+                        save_config(CURRENT_CONFIG)
+
+                        self.chat_history.extend([
+                            {"role": "user", "parts": parts},
+                            {"role": "model", "parts": [{"text": answer}]}
+                        ])
+                        self.chat_history = self.chat_history[-24:]
+                        self.save_chat_history()
+
+                        print("[LAIBA] ACTIVE_FLASH_MODEL:", model)
+
+                        if switched_model:
+                            notice = (
+                                "میرا موجودہ ماڈل دستیاب نہیں رہا، میں نے "
+                                "خودکار طور پر دوسرے دستیاب Free Gemini ماڈل "
+                                "پر سوئچ کر لیا ہے۔ ہماری گفتگو جاری ہے۔"
+                            )
+                            return notice + "\n\n" + answer
+
+                        return answer
+
+                    except (requests.Timeout, requests.ConnectionError) as exc:
+                        errors.append("{} connection failure: {}".format(
+                            model, self._redact_api_keys(exc)[:120]
+                        ))
+                        continue
+                    except requests.RequestException as exc:
+                        errors.append("{} request failure: {}".format(
+                            model, self._redact_api_keys(exc)[:120]
+                        ))
+                        continue
+                    except (ValueError, KeyError, IndexError, TypeError) as exc:
+                        errors.append("{} invalid response ({})".format(
+                            model, type(exc).__name__
+                        ))
+                        continue
+
             except Exception as exc:
-                errors.append("Model discovery: {}".format(
-                    self._redact_api_keys(exc)[:160]
+                errors.append("Model discovery failed: {}".format(
+                    self._redact_api_keys(exc)[:140]
                 ))
                 continue
 
-            # ListModels does not identify free-tier eligibility.
-            # Try only stable Flash models; skip preview/experimental variants.
-            # Google documented Standard Free-tier Flash models.
-            # ListModels confirms availability; this allowlist confirms
-            # the intended free-tier model family.
-            free_model_priority = [
-                "gemini-3.8-flash",
-                "gemini-3.6-flash",
-                "gemini-3.5-flash",
-                "gemini-3.5-flash-lite",
-                "gemini-3.1-flash-lite",
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
-            ]
-
-            available_set = set(discovered)
-            key_models = [
-                name for name in free_model_priority
-                if name in available_set
-            ]
-
-            for name in key_models:
-                if name not in discovered_union:
-                    discovered_union.append(name)
-
-            if not key_models:
-                errors.append("This API key has no stable Flash model available.")
-                continue
-
-            for model in key_models:
-                url = "{}/models/{}:generateContent".format(
-                    self.api_base.rstrip("/"), quote(model, safe="-")
-                )
-
-                try:
-                    response = self._request_with_retry(
-                        "POST",
-                        url,
-                        params={"key": api_key},
-                        json=payload,
-                        timeout=self.timeout
-                    )
-
-                    if not response.ok:
-                        detail = self._safe_error(response)
-                        errors.append("{} HTTP {}: {}".format(
-                            model, response.status_code, detail[:180]
-                        ))
-                        response.close()
-                        continue
-
-                    data = response.json()
-                    response.close()
-
-                    candidates = data.get("candidates") or []
-                    if not candidates:
-                        errors.append("{}: no response candidate".format(model))
-                        continue
-
-                    answer = "".join(
-                        part.get("text", "")
-                        for part in candidates[0].get("content", {}).get("parts", [])
-                        if isinstance(part, dict)
-                    ).strip()
-
-                    if not answer:
-                        errors.append("{}: empty response".format(model))
-                        continue
-
-                    self.api_key = api_key
-                    self.api_keys = [api_key] + [
-                        key for key in self.api_keys if key != api_key
-                    ]
-                    self.model_name = model
-                    self.model_candidates = key_models
-
-                    CURRENT_CONFIG["GEMINI_API_KEY"] = api_key
-                    CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
-                    CURRENT_CONFIG["GEMINI_MODEL"] = model
-                    CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
-                    save_config(CURRENT_CONFIG)
-
-                    self.chat_history.extend([
-                        {"role": "user", "parts": parts},
-                        {"role": "model", "parts": [{"text": answer}]}
-                    ])
-                    self.chat_history = self.chat_history[-24:]
-                    self.save_chat_history()
-
-                    print("[LAIBA] AUTO_SELECTED_FLASH_MODEL:", model)
-                    return answer
-
-                except requests.RequestException as exc:
-                    errors.append("{}: {}".format(
-                        model, self._redact_api_keys(exc)[:160]
-                    ))
-                    continue
-                except (ValueError, KeyError, IndexError, TypeError) as exc:
-                    errors.append("{}: invalid response ({})".format(
-                        model, type(exc).__name__
-                    ))
-                    continue
-
-        self.model_candidates = discovered_union
-        if discovered_union:
-            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = discovered_union
-
-        return "All discovered stable Flash models failed. " + "; ".join(errors[:10])
+        self.model_candidates = discovered_union or self.model_candidates
+        return (
+            "لائبہ اس وقت دستیاب Gemini ماڈلز سے جواب حاصل نہیں کر سکی۔ "
+            "براہِ کرم کچھ دیر بعد دوبارہ کوشش کریں۔"
+        )
 
     def process_message(self, user_text, image_path=None):
         text = str(user_text or "").strip()
