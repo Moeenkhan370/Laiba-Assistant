@@ -28,6 +28,7 @@ class AndroidMediaBridge:
         self.continuous_listening = False
         self.recognition_listener = None
         self.recognition_active = False
+        self._android_ui_runnables = []
         self.is_speaking = False
         self.init_native_tts()
 
@@ -546,6 +547,39 @@ class AndroidMediaBridge:
                 lambda dt: callback(state, str(detail)), 0
             )
 
+    def _run_on_android_ui_thread(self, callback):
+        from jnius import autoclass, PythonJavaClass, java_method
+
+        bridge = self
+
+        class UiRunnable(PythonJavaClass):
+            __javainterfaces__ = ["java/lang/Runnable"]
+            __javacontext__ = "app"
+
+            def __init__(self):
+                super().__init__()
+
+            @java_method("()V")
+            def run(self):
+                try:
+                    callback()
+                except Exception as exc:
+                    print("LAIBA_ANDROID_UI_ERROR:", repr(exc), flush=True)
+                finally:
+                    try:
+                        bridge._android_ui_runnables.remove(self)
+                    except ValueError:
+                        pass
+
+        runnable = UiRunnable()
+        self._android_ui_runnables.append(runnable)
+        try:
+            Activity = autoclass("org.kivy.android.PythonActivity")
+            Activity.mActivity.runOnUiThread(runnable)
+        except Exception:
+            self._android_ui_runnables.remove(runnable)
+            raise
+
     def microphone(self):
         print("LAIBA_MIC_BUTTON: pressed", flush=True)
         self._voice_state("permission", "Requesting microphone permission...")
@@ -563,7 +597,12 @@ class AndroidMediaBridge:
                 or self.is_speaking
             ):
                 return
-        Clock.schedule_once(lambda dt: self._init_and_listen_ui_thread(), 0)
+        try:
+            self._run_on_android_ui_thread(
+                self._init_and_listen_ui_thread
+            )
+        except Exception as exc:
+            self._voice_state("error", "Android UI thread error: " + str(exc))
 
     def _init_and_listen_ui_thread(self):
         try:
@@ -646,15 +685,18 @@ class AndroidMediaBridge:
 
                     if error == 8:
                         def recover(dt):
-                            try:
-                                if bridge.speech_recognizer:
-                                    bridge.speech_recognizer.cancel()
-                                    bridge.speech_recognizer.destroy()
-                            except Exception as exc:
-                                print("LAIBA_RECOGNIZER_RESET:", repr(exc), flush=True)
+                            def reset_recognizer():
+                                try:
+                                    if bridge.speech_recognizer:
+                                        bridge.speech_recognizer.cancel()
+                                        bridge.speech_recognizer.destroy()
+                                except Exception as exc:
+                                    print("LAIBA_RECOGNIZER_RESET:", repr(exc), flush=True)
+                                finally:
+                                    bridge.speech_recognizer = None
+                                    bridge.recognition_listener = None
 
-                            bridge.speech_recognizer = None
-                            bridge.recognition_listener = None
+                            bridge._run_on_android_ui_thread(reset_recognizer)
                             Clock.schedule_once(
                                 lambda dt: bridge._restart_listening(),
                                 0.8
@@ -764,12 +806,16 @@ class AndroidMediaBridge:
             )
 
     def stop_listening(self):
-        try:
-            self.recognition_active = False
+        self.recognition_active = False
+
+        def stop():
             if self.speech_recognizer:
                 self.speech_recognizer.stopListening()
+
+        try:
+            self._run_on_android_ui_thread(stop)
         except Exception as exc:
-            print("LAIBA_SPEECH_STOP:", exc)
+            print("LAIBA_SPEECH_STOP:", repr(exc), flush=True)
 
     def _restart_listening(self):
         app = self.app
