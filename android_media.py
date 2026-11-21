@@ -235,15 +235,21 @@ class AndroidMediaBridge:
         self.is_speaking = False
         self.recognition_active = False
 
+        def destroy_recognizer():
+            try:
+                if self.speech_recognizer:
+                    self.speech_recognizer.cancel()
+                    self.speech_recognizer.destroy()
+            except Exception as exc:
+                print("LAIBA_RECOGNIZER_SHUTDOWN:", repr(exc), flush=True)
+            finally:
+                self.speech_recognizer = None
+                self.recognition_listener = None
+
         try:
-            if self.speech_recognizer:
-                self.speech_recognizer.cancel()
-                self.speech_recognizer.destroy()
+            self._run_on_android_ui_thread(destroy_recognizer)
         except Exception as exc:
-            print("LAIBA_RECOGNIZER_SHUTDOWN:", repr(exc), flush=True)
-        finally:
-            self.speech_recognizer = None
-            self.recognition_listener = None
+            print("LAIBA_RECOGNIZER_SHUTDOWN_QUEUE:", repr(exc), flush=True)
 
         try:
             if self.tts:
