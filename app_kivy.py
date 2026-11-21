@@ -837,16 +837,14 @@ class LaibaKivyApp(App):
             return
 
         if state == "speaking":
+            self.voice_processing = True
             self.voice_status.text = "Laiba is speaking..."
             self.voice_orb.set_state("speaking")
             self.voice_hint.text = "I'll listen again when my reply is complete."
 
-        elif state in ("done", "error"):
-            if (
-                self.voice_active
-                and not self.voice_muted
-                and not self.voice_processing
-            ):
+        elif state == "done":
+            self.voice_processing = False
+            if not self.voice_muted:
                 self.voice_status.text = "Listening..."
                 self.voice_orb.set_state("listening")
                 self.voice_hint.text = "I'm listening. Speak now."
@@ -856,17 +854,25 @@ class LaibaKivyApp(App):
                         self.voice_active
                         and not self.voice_muted
                         and not self.voice_processing
+                        and not self.media_bridge.is_speaking
                     ) else None,
                     0.5
                 )
+
+        elif state == "error":
+            self.voice_processing = False
+            self.voice_status.text = "Laiba voice playback failed"
+            self.voice_orb.set_state("ready")
+            self.voice_hint.text = "TTS error. Check LAIBA_TTS logs. Tap MIC to retry."
 
     def finish_reply(self, result, thinking):
         if thinking.parent:
             thinking.parent.remove_widget(thinking)
         self.add_bubble(str(result), "Laiba")
         if getattr(self, "voice_active", False):
-            self.voice_processing = False
-            self.voice_status.text = "Laiba is replying..."
+            self.voice_processing = True
+            self.voice_status.text = "Laiba is preparing her voice reply..."
+            self.voice_orb.set_state("speaking")
         self.media_bridge.speak(str(result))
 
 

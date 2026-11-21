@@ -111,47 +111,20 @@ class AndroidMediaBridge:
 
             bridge = self
 
-            class ProgressListener(PythonJavaClass):
+            class CompletionListener(PythonJavaClass):
                 __javainterfaces__ = [
-                    "android/speech/tts/UtteranceProgressListener"
+                    "android/speech/tts/TextToSpeech$OnUtteranceCompletedListener"
                 ]
                 __javacontext__ = "app"
 
                 def __init__(self):
                     super().__init__()
 
-                def _is_laiba_reply(self, utterance_id):
-                    return str(utterance_id).startswith("laiba_reply_")
-
                 @java_method("(Ljava/lang/String;)V")
-                def onStart(self, utterance_id):
-                    if self._is_laiba_reply(utterance_id):
-                        Clock.schedule_once(
-                            lambda dt: bridge._tts_state("speaking"), 0
-                        )
-
-                @java_method("(Ljava/lang/String;)V")
-                def onDone(self, utterance_id):
-                    if (
-                        self._is_laiba_reply(utterance_id)
-                        and str(utterance_id) == bridge._tts_last_utterance_id
-                    ):
+                def onUtteranceCompleted(self, utterance_id):
+                    if str(utterance_id) == bridge._tts_last_utterance_id:
                         Clock.schedule_once(
                             lambda dt: bridge._tts_state("done"), 0
-                        )
-
-                @java_method("(Ljava/lang/String;)V")
-                def onError(self, utterance_id):
-                    if self._is_laiba_reply(utterance_id):
-                        Clock.schedule_once(
-                            lambda dt: bridge._tts_state("error"), 0
-                        )
-
-                @java_method("(Ljava/lang/String;Z)V")
-                def onStop(self, utterance_id, interrupted):
-                    if self._is_laiba_reply(utterance_id):
-                        Clock.schedule_once(
-                            lambda dt: bridge._tts_state("stopped"), 0
                         )
 
             class InitListener(PythonJavaClass):
@@ -206,9 +179,13 @@ class AndroidMediaBridge:
 
                         if bridge.tts_ready:
                             bridge._configure_tts_audio()
-                            bridge.tts_progress_listener = ProgressListener()
-                            bridge.tts.setOnUtteranceProgressListener(
+                            bridge.tts_progress_listener = CompletionListener()
+                            bridge.tts.setOnUtteranceCompletedListener(
                                 bridge.tts_progress_listener
+                            )
+                            print(
+                                "LAIBA_TTS_COMPLETION_LISTENER: READY",
+                                flush=True
                             )
                             print(
                                 "LAIBA_TTS_READY:",
@@ -312,6 +289,8 @@ class AndroidMediaBridge:
                 return
 
             self._tts_last_utterance_id = "laiba_reply_" + str(len(chunks) - 1)
+            self.is_speaking = True
+            self._tts_state("speaking")
             print(
                 "LAIBA_TTS_SPEAK_REQUEST:",
                 "characters=", len(text),
@@ -337,6 +316,7 @@ class AndroidMediaBridge:
                 if result == TTS.ERROR:
                     self.pending_speech = None
                     self._tts_last_utterance_id = None
+                    self.is_speaking = False
                     try:
                         self.tts.stop()
                     except Exception:
@@ -345,8 +325,7 @@ class AndroidMediaBridge:
                     self._tts_state("error")
                     return
 
-            self.is_speaking = True
-            self._tts_state("speaking")
+            print("LAIBA_TTS_QUEUE_SUBMITTED", flush=True)
 
         except Exception as exc:
             self.pending_speech = None
