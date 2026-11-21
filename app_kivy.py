@@ -26,7 +26,7 @@ from android_media import AndroidMediaBridge
 
 # Set Window dark background
 Window.clearcolor = (0, 0, 0, 1)
-Window.softinput_mode = 'resize'
+Window.softinput_mode = 'below_target'
 
 
 
