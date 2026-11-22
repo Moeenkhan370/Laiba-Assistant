@@ -2,7 +2,7 @@ name: Build Laiba Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, laiba-self-development]
   workflow_dispatch:
 
 permissions:
