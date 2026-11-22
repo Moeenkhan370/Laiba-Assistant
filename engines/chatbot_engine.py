@@ -520,6 +520,25 @@ class ChatbotEngine:
         if not text and not image_path: return "Please type or say something."
         self.interrupt_flag = False
         intent = self.router.route(text)
+        if intent == "build_status":
+            connected, message = self._connect_development_github()
+            if not connected:
+                return message
+            try:
+                runs = self.development_engine.github_client.list_workflow_runs()
+                items = runs.get("workflow_runs", [])
+                if not items:
+                    return "No GitHub Actions builds found."
+                run = items[0]
+                return "APK Build: {} | Result: {} | Commit: {} | URL: {}".format(
+                    run.get("status", "unknown"),
+                    run.get("conclusion") or "pending",
+                    str(run.get("head_sha", ""))[:12],
+                    run.get("html_url", "Unavailable")
+                )
+            except Exception as exc:
+                return "Build status failed: " + type(exc).__name__
+
         if intent == "workflow_dispatch":
             match = re.fullmatch(r"run workflow\s+([a-zA-Z0-9_.-]+)", text.strip(), re.I)
             if not match:

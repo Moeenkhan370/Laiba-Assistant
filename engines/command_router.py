@@ -4,6 +4,8 @@ import re
 class CommandRouter:
     def route(self, text):
         q = (text or "").strip().lower()
+        if q in ("build status", "check build", "apk status", "بلڈ اسٹیٹس", "اے پی کے اسٹیٹس"):
+            return "build_status"
         if re.fullmatch(r"run workflow\s+[a-zA-Z0-9_.-]+", q):
             return "workflow_dispatch"
         if re.fullmatch(r"(?:approve|apply)\s+(?:(?:proposal|development)\s+)?[0-9]{10,}-[0-9a-f]{8}", q):
