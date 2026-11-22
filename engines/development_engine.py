@@ -26,7 +26,8 @@ class DevelopmentEngine:
 
     ALLOWED_SUFFIXES = {
         ".py", ".md", ".json", ".txt", ".yaml",
-        ".yml", ".toml", ".ini", ".cfg"
+        ".yml", ".toml", ".ini", ".cfg",
+        ".kv", ".spec", ".sh", ".xml", ".gradle", ".properties"
     }
 
     def __init__(self, project_root=".", ai_generate=None, github_client=None):
@@ -43,7 +44,14 @@ class DevelopmentEngine:
         if any(part in self.EXCLUDED_DIRS for part in path.relative_to(self.root).parts):
             raise ValueError("Protected directory.")
         if (path.name.casefold() in {n.casefold() for n in self.EXCLUDED_NAMES}
-                or any(part.startswith(".") for part in path.relative_to(self.root).parts)
+                or any(
+                    part.startswith(".") and not (
+                        parts[0] == ".github" and
+                        len(parts) > 2 and parts[1] == "workflows"
+                    )
+                    for parts in [path.relative_to(self.root).parts]
+                    for part in parts
+                )
                 or path.suffix.lower() not in self.ALLOWED_SUFFIXES):
             raise ValueError("File type or name is protected.")
         return path
@@ -51,7 +59,14 @@ class DevelopmentEngine:
     def inspect_project(self, max_files=None):
         files = []
         for current, dirs, names in os.walk(str(self.root)):
-            dirs[:] = sorted(d for d in dirs if d not in self.EXCLUDED_DIRS and not d.startswith("."))
+            dirs[:] = sorted(
+                d for d in dirs
+                if d not in self.EXCLUDED_DIRS
+                and (
+                    not d.startswith(".")
+                    or (Path(current) == self.root and d == ".github")
+                )
+            )
             for name in sorted(names):
                 path = Path(current) / name
                 try:

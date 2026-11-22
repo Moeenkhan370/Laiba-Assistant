@@ -73,7 +73,14 @@ class GitHubClient:
             path = item.get("path", "")
             parts = path.split("/")
             if (Path(path).suffix.lower() not in allowed
-                    or any(x in blocked or x.startswith(".") for x in parts[:-1])
+                    or any(
+                        x in blocked or
+                        (x.startswith(".") and not (
+                            parts[0] == ".github" and
+                            len(parts) > 2 and parts[1] == "workflows"
+                        ))
+                        for x in parts[:-1]
+                    )
                     or parts[-1].lower() in secret_names
                     or item.get("size", 0) > max_blob_bytes):
                 continue
