@@ -82,6 +82,14 @@ class GitHubClient:
                         for x in parts[:-1]
                     )
                     or parts[-1].lower() in secret_names
+                    or parts[-1].lower().startswith((".env.", "secret", "credential"))
+                    or Path(parts[-1]).suffix.lower() in {
+                        ".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"
+                    }
+                    or (parts[-1].startswith(".") and not (
+                        len(parts) > 2 and parts[0] == ".github"
+                        and parts[1] == "workflows"
+                    ))
                     or item.get("size", 0) > max_blob_bytes):
                 continue
             blob = self.request(base + "/git/blobs/" + item["sha"])
