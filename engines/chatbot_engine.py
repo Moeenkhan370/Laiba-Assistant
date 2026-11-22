@@ -10,6 +10,7 @@ from urllib.parse import quote
 import requests
 from config import CURRENT_CONFIG, save_config
 from engines.command_router import CommandRouter
+from engines.development_engine import DevelopmentEngine
 from engines.file_modifier import FileModifierEngine
 from engines.self_update import SelfUpdateEngine
 from engines.threed_engine import ThreeDEngine
@@ -35,6 +36,12 @@ class ChatbotEngine:
         self.self_updater = SelfUpdateEngine()
         self.threed_engine = ThreeDEngine()
         self.router = CommandRouter()
+        self.development_engine = DevelopmentEngine(
+            str(self.project_root),
+            ai_generate=lambda prompt: self._gemini(
+                prompt, max_output_tokens=8192, include_history=False
+            )
+        )
         self.chat_history = []
         self.session = requests.Session()
 
@@ -282,7 +289,7 @@ class ChatbotEngine:
                 message = message.replace(str(key), "[REDACTED]")
         return message
 
-    def _gemini(self, prompt, image_path=None):
+    def _gemini(self, prompt, image_path=None, max_output_tokens=1024, include_history=True):
         if not self.api_key and not self.api_keys:
             return "Gemini is not connected. Add an API key in Laiba settings."
 
@@ -310,7 +317,7 @@ class ChatbotEngine:
             except OSError as exc:
                 return "Could not read image: {}".format(exc)
 
-        contents = list(self.chat_history[-12:]) + [
+        contents = (list(self.chat_history[-12:]) if include_history else []) + [
             {"role": "user", "parts": parts}
         ]
         payload = {
@@ -324,7 +331,7 @@ class ChatbotEngine:
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 1024
+                "maxOutputTokens": int(max_output_tokens)
             }
         }
 
@@ -441,12 +448,13 @@ class ChatbotEngine:
                         if not save_config(CURRENT_CONFIG):
                             print("[LAIBA] WARNING: Could not persist the active Gemini model.")
 
-                        self.chat_history.extend([
-                            {"role": "user", "parts": parts},
-                            {"role": "model", "parts": [{"text": answer}]}
-                        ])
-                        self.chat_history = self.chat_history[-24:]
-                        self.save_chat_history()
+                        if include_history:
+                            self.chat_history.extend([
+                                {"role": "user", "parts": parts},
+                                {"role": "model", "parts": [{"text": answer}]}
+                            ])
+                            self.chat_history = self.chat_history[-24:]
+                            self.save_chat_history()
 
                         print("[LAIBA] ACTIVE_FLASH_MODEL:", model)
 
@@ -497,6 +505,25 @@ class ChatbotEngine:
         if not text and not image_path: return "Please type or say something."
         self.interrupt_flag = False
         intent = self.router.route(text)
+        if intent == "development_apply":
+            match = re.search(r"([0-9]{10,}-[0-9a-f]{8})", text, re.I)
+            if not match:
+                return "منظوری کے لیے مکمل proposal ID لکھیں۔"
+            result = self.development_engine.apply_proposal(match.group(1), confirm=True)
+            if result.get("status") == "success":
+                return "منظور شدہ تبدیلی مکمل ہوگئی۔\nFiles: " + ", ".join(result.get("files", [])) + "\nBackup: " + str(result.get("backup"))
+            return str(result.get("message", result))
+        if intent == "development_propose":
+            result = self.development_engine.create_proposal(text)
+            if result.get("status") != "proposal":
+                return str(result.get("message", result))
+            lines = ["تبدیلی کی تجویز تیار ہے: " + result.get("summary", ""),
+                     "Proposal ID: " + result["proposal_id"]]
+            for change in result.get("changes", []):
+                lines.append("\\nFile: " + change["path"] + "\\n" + change["preview"][:1000])
+            lines.append("\\nجائزے کے بعد لاگو کرنے کے لیے لکھیں: approve proposal " + result["proposal_id"])
+            lines.append("ابھی کسی فائل میں تبدیلی نہیں کی گئی۔")
+            return "\\n".join(lines)
         if intent == "update_check":
             info = self.self_updater.check_for_updates()
             return "Update check: {}\nCurrent: {}\nLatest: {}\n{}".format(info["status"], info["current_version"], info.get("latest_version") or "unknown", info["changelog"])

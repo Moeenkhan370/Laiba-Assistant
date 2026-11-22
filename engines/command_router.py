@@ -1,8 +1,15 @@
 """Conservative multilingual intent router for supported local engine actions."""
+import re
 
 class CommandRouter:
     def route(self, text):
         q = (text or "").strip().lower()
+        if re.fullmatch(r"(?:approve|apply)\s+(?:(?:proposal|development)\s+)?[0-9]{10,}-[0-9a-f]{8}", q):
+            return "development_apply"
+        if re.match(r"^(?:approve|apply)\\s+(?:(?:proposal|development)\\s+)?[0-9]{10,}-[0-9a-f]{8}$", q):
+            return "development_apply"
+        if any(x in q for x in ("self develop", "self-development", "develop yourself", "improve yourself", "add feature", "create feature", "implement feature", "خود کو بہتر بناؤ", "نیا فیچر بناؤ", "فیچر شامل کرو", "کوڈ میں تبدیلی")):
+            return "development_propose"
         if any(x in q for x in ("check update", "update yourself", "اپ ڈیٹ", "اپڈیٹ", "نیا ورژن")):
             return "update_check"
         if any(x in q for x in ("export zip", "create zip", "whatsapp zip", "zip export", "zip بنا", "زپ بنا")):
