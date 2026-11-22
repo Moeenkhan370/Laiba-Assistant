@@ -21,6 +21,7 @@ from kivy.core.clipboard import Clipboard
 
 from config import CURRENT_CONFIG
 from engines.chatbot_engine import ChatbotEngine
+from engines.github_client import GitHubClient
 from engines.threed_engine import ThreeDEngine
 from android_media import AndroidMediaBridge
 
@@ -396,6 +397,7 @@ class LaibaKivyApp(App):
         for label, callback, color in [
             ("OPEN VOICE MODE", self.open_voice_mode, (0,0.35,0.55,1)),
             ("GEMINI API KEYS", self.open_api_keys, (0.32,0.12,0.48,1)),
+            ("GITHUB TOKEN / WORKFLOWS", self.open_github_settings, (0.02,0.38,0.32,1)),
             ("EXPORT PROJECT ZIP", self.export_zip, (0.02,0.35,0.48,1))
         ]:
             b = Button(text=label, size_hint_y=None, height=dp(48),
@@ -879,6 +881,85 @@ class LaibaKivyApp(App):
             self.voice_orb.set_state("speaking")
         self.media_bridge.speak(str(result))
 
+
+
+    def open_github_settings(self, *args):
+        content = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        content.add_widget(Label(
+            text="[b]GITHUB CONNECTION[/b]", markup=True,
+            size_hint_y=None, height=dp(38), color=(0,0.85,1,1)
+        ))
+        status = Label(
+            text="Enter your GitHub token. It will be saved in app private storage.",
+            size_hint_y=None, height=dp(55), color=(0.7,0.85,1,1)
+        )
+        content.add_widget(status)
+        token_input = TextInput(
+            hint_text="Paste GitHub Personal Access Token",
+            password=True, multiline=False, size_hint_y=None, height=dp(50),
+            background_color=(0.06,0.09,0.15,1),
+            foreground_color=(1,1,1,1)
+        )
+        content.add_widget(token_input)
+        if CURRENT_CONFIG.get("GITHUB_TOKEN"):
+            token_input.hint_text = "Token saved. Enter a new token to replace it."
+
+        connect = Button(
+            text="CONNECT / SAVE TOKEN", size_hint_y=None, height=dp(48),
+            background_normal="", background_color=(0,0.55,0.68,1)
+        )
+        content.add_widget(connect)
+        popup = Popup(title="Laiba - GitHub", content=content, size_hint=(0.94,0.62))
+
+        def connect_github(*_):
+            token = token_input.text.strip()
+            if not token:
+                status.text = "Please enter your GitHub token."
+                return
+            connect.disabled = True
+            status.text = "Checking GitHub access..."
+
+            def worker():
+                ok = False
+                message = "GitHub connection failed."
+                old_token = CURRENT_CONFIG.get("GITHUB_TOKEN", "")
+                try:
+                    client = GitHubClient(
+                        token,
+                        CURRENT_CONFIG["GITHUB_REPOSITORY"],
+                        CURRENT_CONFIG["GITHUB_BRANCH"]
+                    )
+                    result = client.check_access()
+                    ok = bool(result.get("ok"))
+                    message = result.get("message", message)
+                    if ok:
+                        CURRENT_CONFIG["GITHUB_TOKEN"] = token
+                        if not app_config.save_config(CURRENT_CONFIG):
+                            CURRENT_CONFIG["GITHUB_TOKEN"] = old_token
+                            ok = False
+                            message = "Could not save token in app private storage."
+                except Exception as exc:
+                    message = "GitHub error: " + str(exc)[:160]
+
+                message = str(message).replace(token, "[HIDDEN]")
+                def finish(_dt):
+                    connect.disabled = False
+                    status.text = message
+                    if ok:
+                        token_input.text = ""
+                        token_input.hint_text = "Token saved. Enter another token to replace it."
+                Clock.schedule_once(finish, 0)
+
+            Thread(target=worker, daemon=True).start()
+
+        connect.bind(on_release=connect_github)
+        close = Button(
+            text="CLOSE", size_hint_y=None, height=dp(42),
+            background_normal="", background_color=(0.18,0.22,0.32,1)
+        )
+        close.bind(on_release=popup.dismiss)
+        content.add_widget(close)
+        popup.open()
 
     def open_api_keys(self, *args):
         content = BoxLayout(
