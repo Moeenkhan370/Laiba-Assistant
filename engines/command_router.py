@@ -4,6 +4,23 @@ import re
 class CommandRouter:
     def route(self, text):
         q = (text or "").strip().lower()
+        if any(x in q for x in (
+            "latest commits", "last commits", "recent commits", "show latest", "show last", "latest 5 commits",
+            "commit history", "commits dikhao", "commits parho",
+            "commits پڑھو", "آخری commits", "کمیٹس دکھاؤ"
+        )):
+            return "github_commits"
+        if any(x in q for x in (
+            "list repository files", "show repository files",
+            "repository files", "repo files", "repo ki files",
+            "repository ki files", "فائلوں کی فہرست"
+        )):
+            return "github_file_list"
+        if any(x in q for x in (
+            "read file", "show file", "read repository file",
+            "file content", "file ka code", "فائل پڑھو", "فائل دکھاؤ"
+        )):
+            return "github_file_read"
         if q in ("build status", "check build", "apk status", "بلڈ اسٹیٹس", "اے پی کے اسٹیٹس"):
             return "build_status"
         if re.fullmatch(r"run workflow\s+[a-zA-Z0-9_.-]+", q):

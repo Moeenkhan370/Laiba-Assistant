@@ -552,6 +552,49 @@ class ChatbotEngine:
             except Exception as exc:
                 return "Build status failed: " + type(exc).__name__
 
+        if intent in ("github_commits", "github_file_list", "github_file_read"):
+            connected, message = self._connect_development_github()
+            if not connected:
+                return message
+            client = self.development_engine.github_client
+            try:
+                if intent == "github_commits":
+                    match = re.search(r"\b(\d{1,2})\s+commits?\b", text, re.I)
+                    count = max(1, min(20, int(match.group(1)))) if match else 5
+                    commits = client.list_commits(count)
+                    if not commits:
+                        return "No commits found on the configured GitHub branch."
+                    lines = ["Latest GitHub commits ({}) :".format(CURRENT_CONFIG.get("GITHUB_BRANCH", ""))]
+                    for item in commits:
+                        commit = item.get("commit", {})
+                        message_text = str(commit.get("message", "")).splitlines()[0]
+                        lines.append("{} | {}".format(
+                            str(item.get("sha", ""))[:12], message_text[:160]
+                        ))
+                    return "\\n".join(lines)
+
+                if intent == "github_file_list":
+                    paths = client.list_repository_files()
+                    if not paths:
+                        return "No supported text files found in the repository."
+                    shown = paths[:80]
+                    return "Repository files ({} total):\\n{}".format(
+                        len(paths), "\\n".join(shown)
+                    )
+
+                match = re.search(
+                    r"(?:file|فائل)\\s+([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)",
+                    text, re.I
+                )
+                if not match:
+                    return "File path required. Example: read file engines/chatbot_engine.py"
+                content = client.read_file(match.group(1))
+                return "GitHub file: {}\\n\\n{}".format(
+                    match.group(1), content[:12000]
+                )
+            except Exception as exc:
+                return "GitHub read failed: " + type(exc).__name__ + ": " + str(exc)[:180]
+
         if intent == "workflow_dispatch":
             match = re.fullmatch(r"run workflow\s+([a-zA-Z0-9_.-]+)", text.strip(), re.I)
             if not match:
