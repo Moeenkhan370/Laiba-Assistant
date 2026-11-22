@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import urllib.request
 from config import CURRENT_CONFIG
 
@@ -16,10 +17,10 @@ class SelfUpdateEngine:
 
     @staticmethod
     def _version_tuple(value):
-        try:
-            return tuple(int(part) for part in str(value).strip().lstrip("v").split("."))
-        except ValueError:
-            return ()
+        value = str(value).strip()
+        if not re.fullmatch(r"v?\d+\.\d+\.\d+", value):
+            raise ValueError("Invalid version format: {}".format(value))
+        return tuple(int(part) for part in value.lstrip("v").split("."))
 
     def check_for_updates(self):
         if not self.update_url:

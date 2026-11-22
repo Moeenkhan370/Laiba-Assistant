@@ -67,10 +67,13 @@ class DevelopmentEngine:
     @staticmethod
     def _redact_sensitive(content):
         content = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[REDACTED]", str(content))
-        content = re.sub(r"(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+", r"\\1[REDACTED]", content)
         content = re.sub(
-            r"""(?im)^([\\t ]*["\']?[\\w.-]*(?:api[_-]?key|access[_-]?token|secret|password|client_secret|authorization)[\\w.-]*["\']?[\\t ]*[:=][\\t ]*)["\']?[^\\r\\n,}]+""",
-            r"\\1[REDACTED]", content
+            r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+",
+            r"\1[REDACTED]", content
+        )
+        content = re.sub(
+            r"""(?im)(\b[\w.-]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|client_secret|authorization|token)[\w.-]*\b\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^,\s}\r\n]+)""",
+            r"\1[REDACTED]", content
         )
         return content
 
