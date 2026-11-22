@@ -4,11 +4,11 @@ import re
 class CommandRouter:
     def route(self, text):
         q = (text or "").strip().lower()
-        if re.fullmatch(r"run workflow\\s+[a-zA-Z0-9_.-]+", q):
+        if re.fullmatch(r"run workflow\s+[a-zA-Z0-9_.-]+", q):
             return "workflow_dispatch"
         if re.fullmatch(r"(?:approve|apply)\s+(?:(?:proposal|development)\s+)?[0-9]{10,}-[0-9a-f]{8}", q):
             return "development_apply"
-        if re.match(r"^(?:approve|apply)\\s+(?:(?:proposal|development)\\s+)?[0-9]{10,}-[0-9a-f]{8}$", q):
+        if re.match(r"^(?:approve|apply)\s+(?:(?:proposal|development)\s+)?[0-9]{10,}-[0-9a-f]{8}$", q):
             return "development_apply"
         if any(x in q for x in ("self develop", "self-development", "develop yourself", "improve yourself", "add feature", "create feature", "implement feature", "خود کو بہتر بناؤ", "نیا فیچر بناؤ", "فیچر شامل کرو", "کوڈ میں تبدیلی")):
             return "development_propose"

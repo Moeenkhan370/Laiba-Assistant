@@ -507,7 +507,7 @@ class ChatbotEngine:
         self.interrupt_flag = False
         intent = self.router.route(text)
         if intent == "workflow_dispatch":
-            match = re.fullmatch(r"run workflow\\s+([a-zA-Z0-9_.-]+)", text.strip(), re.I)
+            match = re.fullmatch(r"run workflow\s+([a-zA-Z0-9_.-]+)", text.strip(), re.I)
             if not match:
                 return "Workflow command is invalid."
             token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
