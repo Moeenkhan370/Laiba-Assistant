@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -68,3 +68,16 @@ jobs:
           path: bin/*.apk
           if-no-files-found: error
           retention-days: 14
+      - name: Publish APK to GitHub Releases
+        if: github.ref == 'refs/heads/laiba-self-development'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: laiba-development-latest
+          name: Laiba Development APK
+          prerelease: true
+          make_latest: false
+          files: bin/*.apk
+          overwrite_files: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
