@@ -501,6 +501,20 @@ class ChatbotEngine:
             "براہِ کرم کچھ دیر بعد دوبارہ کوشش کریں۔"
         )
 
+    def _connect_development_github(self):
+        token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
+        repository = str(CURRENT_CONFIG.get("GITHUB_REPOSITORY", "")).strip()
+        branch = str(CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")).strip()
+        if not token:
+            self.development_engine.github_client = None
+            return False, "GitHub token is missing. Connect GitHub in Laiba Settings first."
+        try:
+            self.development_engine.github_client = GitHubClient(token, repository, branch)
+            return True, "GitHub client ready."
+        except Exception as exc:
+            self.development_engine.github_client = None
+            return False, "GitHub configuration error: " + type(exc).__name__
+
     def process_message(self, user_text, image_path=None):
         text = str(user_text or "").strip()
         if not text and not image_path: return "Please type or say something."
@@ -528,30 +542,17 @@ class ChatbotEngine:
             match = re.search(r"([0-9]{10,}-[0-9a-f]{8})", text, re.I)
             if not match:
                 return "منظوری کے لیے مکمل proposal ID لکھیں۔"
+            connected, message = self._connect_development_github()
+            if not connected:
+                return message
             result = self.development_engine.apply_proposal(match.group(1), confirm=True)
             if result.get("status") == "success":
                 return "منظور شدہ تبدیلی مکمل ہوگئی۔\nFiles: " + ", ".join(result.get("files", [])) + "\nBackup: " + str(result.get("backup"))
             return str(result.get("message", result))
         if intent == "development_propose":
-            token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
-            if token:
-                try:
-                    self.development_engine.github_client = GitHubClient(
-                        token,
-                        CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
-                        CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
-                    )
-                except Exception:
-                    self.development_engine.github_client = None
-            if token:
-                try:
-                    self.development_engine.github_client = GitHubClient(
-                        token,
-                        CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
-                        CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
-                    )
-                except Exception:
-                    self.development_engine.github_client = None
+            connected, message = self._connect_development_github()
+            if not connected:
+                return message
             result = self.development_engine.create_proposal(text)
             if result.get("status") != "proposal":
                 return str(result.get("message", result))
