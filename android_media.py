@@ -34,6 +34,8 @@ class AndroidMediaBridge:
         self.tts_audio_attributes = None
         self._tts_last_utterance_id = None
         self._tts_stop_requested = False
+        self._tts_original_text = None
+        self._tts_fallback_attempted = False
         self.init_native_tts()
 
     def _configure_tts_audio(self):
@@ -401,6 +403,8 @@ class AndroidMediaBridge:
             if utterance_id == self._tts_last_utterance_id:
                 self._tts_last_utterance_id = None
                 self._tts_stop_requested = False
+                self._tts_original_text = None
+                self._tts_fallback_attempted = False
                 self._tts_state("done")
             return
 
@@ -409,10 +413,6 @@ class AndroidMediaBridge:
                 self.is_speaking
                 and utterance_id.startswith("laiba_reply_")
             ):
-                self.pending_speech = None
-                self._tts_last_utterance_id = None
-                self.is_speaking = False
-
                 print(
                     "LAIBA_TTS_PLAYBACK_ERROR:",
                     error_code,
@@ -420,6 +420,14 @@ class AndroidMediaBridge:
                     flush=True
                 )
 
+                if self._retry_tts_with_device_default(
+                    "Android callback error " + str(error_code)
+                ):
+                    return
+
+                self.pending_speech = None
+                self._tts_last_utterance_id = None
+                self.is_speaking = False
                 self._tts_state("error")
             return
 
@@ -441,6 +449,83 @@ class AndroidMediaBridge:
 
                 self._tts_state("error")
 
+    def _retry_tts_with_device_default(self, reason):
+        """Retry once with an installed Android fallback voice."""
+        if (
+            self._tts_fallback_attempted
+            or self.tts is None
+            or self.tts_language != "ur-PK"
+            or not self._tts_original_text
+        ):
+            return False
+
+        self._tts_fallback_attempted = True
+        text = self._tts_original_text
+
+        try:
+            from jnius import autoclass
+
+            TTS = autoclass("android.speech.tts.TextToSpeech")
+            Locale = autoclass("java.util.Locale")
+
+            self._tts_stop_requested = True
+            try:
+                self.tts.stop()
+            except Exception:
+                pass
+
+            options = [
+                ("device-default", Locale.getDefault()),
+                ("en-US-fallback", Locale("en", "US"))
+            ]
+
+            selected = None
+
+            for name, locale in options:
+                try:
+                    result = self.tts.setLanguage(locale)
+                    tag = str(locale.toLanguageTag())
+
+                    print(
+                        "LAIBA_TTS_FALLBACK_LANGUAGE:",
+                        name, tag, result, flush=True
+                    )
+
+                    if result >= TTS.LANG_AVAILABLE and tag.lower() != "ur-pk":
+                        selected = name
+                        break
+
+                except Exception as exc:
+                    print(
+                        "LAIBA_TTS_FALLBACK_LANGUAGE_ERROR:",
+                        repr(exc), flush=True
+                    )
+
+            if selected is None:
+                self._tts_stop_requested = False
+                print("LAIBA_TTS_FALLBACK_UNAVAILABLE:", reason, flush=True)
+                return False
+
+            self.tts_language = selected
+            self.pending_speech = None
+            self._tts_last_utterance_id = None
+            self.is_speaking = False
+
+            print("LAIBA_TTS_FALLBACK_RETRY:", selected, reason, flush=True)
+
+            Clock.schedule_once(
+                lambda dt: self._speak_native(
+                    text, allow_fallback=False
+                ),
+                0.2
+            )
+            return True
+
+        except Exception as exc:
+            self._tts_stop_requested = False
+            print("LAIBA_TTS_FALLBACK_ERROR:", repr(exc), flush=True)
+            return False
+
     def stop_speaking(self):
         self.pending_speech = None
         self._tts_stop_requested = True
@@ -460,9 +545,11 @@ class AndroidMediaBridge:
         self._tts_state("stopped")
 
     def speak(self, text):
-        self._speak_native(str(text))
+        self._tts_original_text = str(text).strip()
+        self._tts_fallback_attempted = False
+        self._speak_native(self._tts_original_text)
 
-    def _speak_native(self, text):
+    def _speak_native(self, text, allow_fallback=True):
         try:
             from jnius import autoclass
 
@@ -557,6 +644,19 @@ class AndroidMediaBridge:
                 )
 
                 if result == TTS.ERROR:
+                    print(
+                        "LAIBA_TTS_SPEAK_ERROR:",
+                        index, flush=True
+                    )
+
+                    if (
+                        allow_fallback
+                        and self._retry_tts_with_device_default(
+                            "Android speak() returned ERROR"
+                        )
+                    ):
+                        return
+
                     self.pending_speech = None
                     self._tts_last_utterance_id = None
                     self.is_speaking = False
@@ -565,11 +665,6 @@ class AndroidMediaBridge:
                         self.tts.stop()
                     except Exception:
                         pass
-
-                    print(
-                        "LAIBA_TTS_SPEAK_ERROR: Android returned ERROR",
-                        flush=True
-                    )
 
                     self._tts_state("error")
                     return
@@ -580,16 +675,23 @@ class AndroidMediaBridge:
             )
 
         except Exception as exc:
-            self.pending_speech = None
-            self._tts_last_utterance_id = None
-            self.is_speaking = False
-
             print(
                 "LAIBA_NATIVE_TTS_ERROR:",
                 repr(exc),
                 flush=True
             )
 
+            if (
+                allow_fallback
+                and self._retry_tts_with_device_default(
+                    "Native TTS exception: " + repr(exc)
+                )
+            ):
+                return
+
+            self.pending_speech = None
+            self._tts_last_utterance_id = None
+            self.is_speaking = False
             self._tts_state("error")
 
     def _tts_state(self, state):
