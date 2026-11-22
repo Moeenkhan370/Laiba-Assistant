@@ -232,12 +232,30 @@ class DevelopmentEngine:
                 )
                 if test.returncode:
                     raise RuntimeError("Tests failed: " + (test.stdout + test.stderr)[-1200:])
+            remote_commit = None
+            if self.github_client is not None:
+                staged_changes = [
+                    {
+                        "path": str(target.relative_to(self.root)),
+                        "content": content
+                    }
+                    for target, content, _ in staged
+                ]
+                remote_commit = self.github_client.commit_files(
+                    staged_changes,
+                    "Laiba approved self-development: " + str(proposal_id),
+                    approved=True
+                )
+
             del self.pending[str(proposal_id)]
             return {
                 "status": "success",
                 "files": [str(target.relative_to(self.root)) for target, _, _ in staged],
                 "backup": str(backup_dir) if backup_dir.exists() else None,
-                "message": "Approved changes applied successfully."
+                "github_commit": remote_commit.get("commit") if remote_commit else None,
+                "message": "Approved changes applied and GitHub commit completed."
+                    if remote_commit else
+                    "Approved changes applied locally; GitHub client is not connected."
             }
         except Exception as exc:
             for target, backup in reversed(written):
