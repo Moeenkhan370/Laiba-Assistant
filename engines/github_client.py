@@ -35,17 +35,35 @@ class GitHubClient:
         return response.json()
 
     def check_access(self):
+        base = "/repos/" + self.repository
         account = self.request("/user")
-        self.request("/repos/" + self.repository)
+        repository = self.request(base)
+        branch = quote(self.branch, safe="")
+        ref = self.request(base + "/git/ref/heads/" + branch)
+        commit = self.request(base + "/git/commits/" + ref["object"]["sha"])
+        self.request(base + "/git/trees/" + commit["tree"]["sha"])
         workflows = self.request(
-            "/repos/" + self.repository + "/actions/workflows",
-            {"per_page": 100}
+            base + "/actions/workflows", {"per_page": 100}
         )
-        count = len(workflows.get("workflows", []))
+        permissions = repository.get("permissions") or {}
+        push_access = bool(permissions.get("push"))
         return {
             "ok": True,
-            "message": "Connected as @{}. Repository accessible; {} workflow(s) found.".format(
-                account.get("login", "GitHub user"), count
+            "account": account.get("login", "unknown"),
+            "repository": self.repository,
+            "branch": self.branch,
+            "read_verified": True,
+            "account_push_access": push_access,
+            "token_write_verified": False,
+            "workflow_count": len(workflows.get("workflows", [])),
+            "message": (
+                "Read access verified for @{} on {} branch; "
+                "account push access: {}. Token write permission is not "
+                "claimed because no remote write test was performed."
+            ).format(
+                account.get("login", "GitHub user"),
+                self.branch,
+                "available" if push_access else "unavailable"
             )
         }
 
