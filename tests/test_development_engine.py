@@ -36,6 +36,16 @@ class DevelopmentEngineTests(unittest.TestCase):
         self.assertEqual((self.root / "sample.py").read_text(), "VALUE = 2\n")
         self.assertTrue(Path(result["backup"]).is_dir())
 
+    def test_rejects_stale_proposal_after_file_changes(self):
+        engine = self.engine_for("sample.py", "VALUE = 2\n")
+        proposal = engine.create_proposal("Improve sample")
+        self.assertEqual(proposal["status"], "proposal")
+        (self.root / "sample.py").write_text("VALUE = 99\n", encoding="utf-8")
+        result = engine.apply_proposal(proposal["proposal_id"], confirm=True)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("stale", result["message"].lower())
+        self.assertEqual((self.root / "sample.py").read_text(), "VALUE = 99\n")
+
     def test_rejects_path_traversal(self):
         engine = self.engine_for("../outside.py", "VALUE = 2\n")
         self.assertEqual(engine.create_proposal("unsafe change")["status"], "error")

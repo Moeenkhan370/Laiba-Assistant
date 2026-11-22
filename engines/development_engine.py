@@ -1,5 +1,6 @@
 """Safe Gemini-assisted self-development engine for Laiba."""
 import ast
+import hashlib
 import subprocess
 import sys
 import json
@@ -36,6 +37,7 @@ class DevelopmentEngine:
         self.ai_generate = ai_generate
         self.github_client = github_client
         self.pending = {}
+        self.pending_baselines = {}
 
     def _safe_path(self, relative_path):
         path = (self.root / str(relative_path)).resolve()
@@ -186,6 +188,13 @@ class DevelopmentEngine:
 
             proposal_id = "{}-{}".format(int(time.time()), os.urandom(4).hex())
             self.pending[proposal_id] = validated
+            self.pending_baselines[proposal_id] = {
+                item["path"]: (
+                    hashlib.sha256((self.root / item["path"]).read_bytes()).hexdigest()
+                    if (self.root / item["path"]).is_file() else None
+                )
+                for item in validated
+            }
             return {
                 "status": "proposal",
                 "proposal_id": proposal_id,
@@ -212,8 +221,17 @@ class DevelopmentEngine:
         written = []
 
         try:
+            expected = self.pending_baselines.get(str(proposal_id), {})
             for item in changes:
                 target = self._safe_path(item["path"])
+                actual = (
+                    hashlib.sha256(target.read_bytes()).hexdigest()
+                    if target.is_file() else None
+                )
+                if actual != expected.get(item["path"]):
+                    raise RuntimeError(
+                        "Proposal is stale: file changed after review: " + item["path"]
+                    )
                 if target.exists() and not target.is_file():
                     raise ValueError("Target is not a regular file.")
                 if target.suffix.lower() == ".py":
@@ -263,6 +281,7 @@ class DevelopmentEngine:
                 )
 
             del self.pending[str(proposal_id)]
+            self.pending_baselines.pop(str(proposal_id), None)
             return {
                 "status": "success",
                 "files": [str(target.relative_to(self.root)) for target, _, _ in staged],
