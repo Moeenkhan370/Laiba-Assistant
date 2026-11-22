@@ -506,6 +506,24 @@ class ChatbotEngine:
         if not text and not image_path: return "Please type or say something."
         self.interrupt_flag = False
         intent = self.router.route(text)
+        if intent == "workflow_dispatch":
+            match = re.fullmatch(r"run workflow\\s+([a-zA-Z0-9_.-]+)", text.strip(), re.I)
+            if not match:
+                return "Workflow command is invalid."
+            token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
+            if not token:
+                return "GitHub token is not configured."
+            try:
+                client = GitHubClient(
+                    token,
+                    CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
+                    CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
+                )
+                result = client.dispatch_workflow(match.group(1), approved=True)
+                return "Workflow dispatch accepted: " + str(result)
+            except Exception as exc:
+                return "Workflow dispatch failed: " + type(exc).__name__
+
         if intent == "development_apply":
             match = re.search(r"([0-9]{10,}-[0-9a-f]{8})", text, re.I)
             if not match:
@@ -516,6 +534,15 @@ class ChatbotEngine:
             return str(result.get("message", result))
         if intent == "development_propose":
             token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
+            if token:
+                try:
+                    self.development_engine.github_client = GitHubClient(
+                        token,
+                        CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
+                        CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
+                    )
+                except Exception:
+                    self.development_engine.github_client = None
             if token:
                 try:
                     self.development_engine.github_client = GitHubClient(

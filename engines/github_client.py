@@ -1,6 +1,7 @@
 """GitHub API client. Never send the token to Gemini."""
 import requests
 import base64
+from pathlib import Path
 from urllib.parse import quote
 
 class GitHubClient:
@@ -13,8 +14,9 @@ class GitHubClient:
         if not self.token or "/" not in self.repository:
             raise ValueError("Invalid GitHub token or repository.")
 
-    def request(self, endpoint, params=None):
-        response = requests.get(
+    def request(self, endpoint, params=None, method="GET", json_body=None):
+        response = requests.request(
+            method,
             self.API + endpoint,
             headers={
                 "Accept": "application/vnd.github+json",
@@ -22,7 +24,7 @@ class GitHubClient:
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "Laiba-Assistant"
             },
-            params=params, timeout=(8, 20)
+            params=params, json=json_body, timeout=(8, 20)
         )
         if response.status_code >= 400:
             try:
@@ -47,13 +49,16 @@ class GitHubClient:
             )
         }
 
-    def fetch_repository_files(self, max_files=500, max_blob_bytes=50000):
+    def fetch_repository_files(self, max_files=2000, max_blob_bytes=100000):
         """Read eligible text files from the configured branch; never write to GitHub."""
         branch = quote(self.branch, safe="")
         base = "/repos/" + self.repository
         ref = self.request(base + "/git/ref/heads/" + branch)
-        tree_sha = ref["object"]["sha"]
+        commit = self.request(base + "/git/commits/" + ref["object"]["sha"])
+        tree_sha = commit["tree"]["sha"]
         tree = self.request(base + "/git/trees/" + tree_sha, {"recursive": "1"})
+        if tree.get("truncated"):
+            raise RuntimeError("GitHub returned an incomplete repository tree; refusing partial analysis.")
         allowed = {
             ".py", ".md", ".json", ".txt", ".yaml", ".yml",
             ".toml", ".ini", ".cfg", ".kv", ".spec", ".sh",
@@ -81,6 +86,18 @@ class GitHubClient:
             if len(files) >= max_files:
                 break
         return files
+
+    def dispatch_workflow(self, workflow_id, approved=False):
+        if approved is not True:
+            raise PermissionError("Explicit user approval is required.")
+        if not str(workflow_id).strip():
+            raise ValueError("Workflow ID is required.")
+        return self.request(
+            "/repos/" + self.repository + "/actions/workflows/"
+            + quote(str(workflow_id), safe="") + "/dispatches",
+            method="POST",
+            json_body={"ref": self.branch}
+        )
 
     def list_workflows(self):
         return self.request(

@@ -29,10 +29,11 @@ class DevelopmentEngine:
         ".yml", ".toml", ".ini", ".cfg"
     }
 
-    def __init__(self, project_root=".", ai_generate=None):
+    def __init__(self, project_root=".", ai_generate=None, github_client=None):
         self.root = Path(project_root).expanduser().resolve()
         self.backup_root = self.root / ".laiba_backups" / "development_engine"
         self.ai_generate = ai_generate
+        self.github_client = github_client
         self.pending = {}
 
     def _safe_path(self, relative_path):
@@ -90,7 +91,23 @@ class DevelopmentEngine:
                 )
             except (OSError, UnicodeError, ValueError):
                 continue
-        return "\n".join(context)[:250000]
+        if self.github_client:
+            try:
+                remote_files = self.github_client.fetch_repository_files()
+                for relative, content in sorted(remote_files.items()):
+                    safe_content = self._redact_sensitive(content)
+                    context.append(
+                        "\\n--- GITHUB BRANCH FILE: {} ---\\n{}".format(
+                            relative, safe_content[:8000]
+                        )
+                    )
+            except Exception as exc:
+                context.append(
+                    "\\nGITHUB REPOSITORY READ ERROR: {}\\n".format(
+                        type(exc).__name__
+                    )
+                )
+        return "\\n".join(context)[:250000]
 
     @staticmethod
     def _parse_json(response):
