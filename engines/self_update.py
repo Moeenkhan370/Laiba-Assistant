@@ -12,7 +12,7 @@ from config import CURRENT_CONFIG
 class SelfUpdateEngine:
     def __init__(self, current_version=None, update_url=None, timeout=12, state_path=None):
         self.version = current_version or CURRENT_CONFIG.get("VERSION", "1.0.0")
-        self.update_url = update_url or CURRENT_CONFIG.get("UPDATE_SERVER_URL", "")
+        self.update_url = CURRENT_CONFIG.get("UPDATE_SERVER_URL", "") if update_url is None else update_url
         self.timeout = timeout
         self.is_checking = False
         self.auto_update_enabled = False

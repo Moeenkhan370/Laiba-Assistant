@@ -10,7 +10,7 @@ import os
 # Default Pure Black Theme and System Configuration
 DEFAULT_CONFIG = {
     "APP_NAME": "Laiba Assistant",
-    "VERSION": "1.0.0",
+    "VERSION": "1.0.3",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
     "GITHUB_TOKEN": "",
     "GITHUB_REPOSITORY": "Moeenkhan370/Laiba-Assistant",
@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "GEMINI_MODEL_CANDIDATES": [],
     "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta",
     "GEMINI_TIMEOUT": 15,
-    "UPDATE_SERVER_URL": "",  # Configure a real JSON manifest URL before enabling update checks.
+    "UPDATE_SERVER_URL": "https://github.com/Moeenkhan370/Laiba-Assistant/releases/download/laiba-development-latest/update_manifest.json",  # Configure a real JSON manifest URL before enabling update checks.
     "AUTO_UPDATE_CHECK": True,
     
     # Pure Black UI Theme Palette (#000000 as explicitly required)

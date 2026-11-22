@@ -126,7 +126,7 @@ class LaibaKivyApp(App):
         self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
         self.chatbot = ChatbotEngine()
         self.media_bridge = AndroidMediaBridge(self)
-        self.update_engine = SelfUpdateEngine(current_version=CURRENT_CONFIG.get("VERSION", "1.0.2"), state_path=os.path.join(self.user_data_dir, "laiba_update_state.json"))
+        self.update_engine = SelfUpdateEngine(current_version=CURRENT_CONFIG.get("VERSION", "1.0.3"), state_path=os.path.join(self.user_data_dir, "laiba_update_state.json"))
         self.update_in_progress = False
         self.threed_engine = ThreeDEngine()
         self.chat_history = self.load_history()

@@ -64,11 +64,21 @@ jobs:
         run: |
           buildozer -v android debug
 
+      - name: Generate HTTPS update manifest
+        run: |
+          APK="$(find bin -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          test -n "$APK"
+          HASH="$(sha256sum "$APK" | cut -d' ' -f1)"
+          NAME="$(basename "$APK")"
+          printf '{"version":"1.0.3","changelog":"Laiba self-update release 1.0.3","apk_url":"https://github.com/Moeenkhan370/Laiba-Assistant/releases/download/laiba-development-latest/%s","sha256":"%s"}\n' "$NAME" "$HASH" > update_manifest.json
+
       - name: Upload Laiba APK
         uses: actions/upload-artifact@v4
         with:
           name: Laiba-Assistant-APK
-          path: bin/*.apk
+          path: |
+            bin/*.apk
+            update_manifest.json
           if-no-files-found: error
           retention-days: 14
       - name: Publish APK to GitHub Releases
@@ -79,7 +89,9 @@ jobs:
           name: Laiba Development APK
           prerelease: true
           make_latest: false
-          files: bin/*.apk
+          files: |
+            bin/*.apk
+            update_manifest.json
           overwrite_files: true
           fail_on_unmatched_files: true
         env:
