@@ -16,6 +16,29 @@ class FileModifierEngine:
         candidate = (self.base_dir / str(filepath)).resolve()
         if candidate != self.base_dir and self.base_dir not in candidate.parents:
             raise ValueError("Path is outside the authorized project directory")
+
+        relative = candidate.relative_to(self.base_dir)
+        parts = [part.lower() for part in relative.parts]
+        blocked_dirs = {
+            ".git", ".laiba_backups", ".ssh", "secrets", "credentials"
+        }
+        blocked_names = {
+            "id_rsa", "id_ed25519", "authorized_keys",
+            "known_hosts", "credentials.json", "secrets.json"
+        }
+
+        for part in parts:
+            if part in blocked_dirs:
+                raise ValueError("Access to protected project data is denied")
+            if part == ".env" or part.startswith(".env."):
+                raise ValueError("Access to environment files is denied")
+            if part in blocked_names:
+                raise ValueError("Access to credential files is denied")
+            if Path(part).suffix in {
+                ".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"
+            }:
+                raise ValueError("Access to private key files is denied")
+
         return candidate
 
     def _backup(self, target):
