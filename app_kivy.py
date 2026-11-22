@@ -24,6 +24,7 @@ from engines.chatbot_engine import ChatbotEngine
 from engines.github_client import GitHubClient
 from engines.threed_engine import ThreeDEngine
 from android_media import AndroidMediaBridge
+from engines.self_update import SelfUpdateEngine
 
 # Set Window dark background
 Window.clearcolor = (0, 0, 0, 1)
@@ -125,6 +126,8 @@ class LaibaKivyApp(App):
         self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
         self.chatbot = ChatbotEngine()
         self.media_bridge = AndroidMediaBridge(self)
+        self.update_engine = SelfUpdateEngine(current_version=CURRENT_CONFIG.get("VERSION", "1.0.2"), state_path=os.path.join(self.user_data_dir, "laiba_update_state.json"))
+        self.update_in_progress = False
         self.threed_engine = ThreeDEngine()
         self.chat_history = self.load_history()
 
@@ -398,6 +401,7 @@ class LaibaKivyApp(App):
             ("OPEN VOICE MODE", self.open_voice_mode, (0,0.35,0.55,1)),
             ("GEMINI API KEYS", self.open_api_keys, (0.32,0.12,0.48,1)),
             ("GITHUB TOKEN / WORKFLOWS", self.open_github_settings, (0.02,0.38,0.32,1)),
+            ("CHECK FOR UPDATES", self.check_laiba_updates, (0.02,0.42,0.52,1)),
             ("EXPORT PROJECT ZIP", self.export_zip, (0.02,0.35,0.48,1))
         ]:
             b = Button(text=label, size_hint_y=None, height=dp(48),
@@ -1169,6 +1173,135 @@ class LaibaKivyApp(App):
             CURRENT_CONFIG.update(old_config)
             status.text = "Delete failed: " + str(exc)[:180]
 
+    def _update_notice(self, message):
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        box.add_widget(Label(text=str(message), halign="center", valign="middle"))
+        close = Button(text="OK", size_hint_y=None, height=dp(44))
+        popup = Popup(title="Laiba Update", content=box, size_hint=(0.88, 0.42))
+        close.bind(on_release=popup.dismiss)
+        box.add_widget(close)
+        popup.open()
+
+    def check_laiba_updates(self, *args):
+        if self.update_in_progress:
+            self._update_notice("An update operation is already running.")
+            return
+        self.update_in_progress = True
+        self._update_notice("Checking for Laiba updates...")
+
+        def worker():
+            try:
+                result = self.update_engine.check_for_updates()
+                Clock.schedule_once(
+                    lambda dt: self._finish_update_check(result), 0
+                )
+            except Exception as exc:
+                message = str(exc)
+                Clock.schedule_once(
+                    lambda dt, msg=message: self._finish_update_error(msg), 0
+                )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _finish_update_error(self, message):
+        self.update_in_progress = False
+        self._update_notice("Update check failed: " + str(message)[:300])
+
+    def _finish_update_check(self, result):
+        if result.get("status") != "ok":
+            self.update_in_progress = False
+            self._update_notice(result.get("changelog", "Update check failed."))
+            return
+        if not result.get("update_available"):
+            self.update_in_progress = False
+            self._update_notice("Laiba is up to date.")
+            return
+        url = result.get("download_url")
+        digest = result.get("sha256")
+        if not url or not digest:
+            self.update_in_progress = False
+            self._update_notice("Update rejected: secure APK URL or SHA-256 is missing.")
+            return
+
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        box.add_widget(Label(
+            text="New version: {}\\n\\n{}\\n\\nDownload and open Android installer?".format(
+                result.get("latest_version", "Unknown"),
+                result.get("changelog", "No changelog provided.")
+            ),
+            halign="center", valign="middle"
+        ))
+        actions = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        popup = Popup(title="Laiba Update Available", content=box, size_hint=(0.92, 0.55))
+        cancel = Button(text="CANCEL")
+        install = Button(text="DOWNLOAD & INSTALL")
+        cancel.bind(on_release=lambda *_: (popup.dismiss(), setattr(self, "update_in_progress", False)))
+        install.bind(on_release=lambda *_: (popup.dismiss(), self._download_laiba_update(result)))
+        actions.add_widget(cancel)
+        actions.add_widget(install)
+        box.add_widget(actions)
+        popup.open()
+
+    def _download_laiba_update(self, info):
+        self._update_notice("Downloading and verifying APK...")
+        def worker():
+            path = os.path.join(self.user_data_dir, "updates", "Laiba-update.apk")
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                if os.path.exists(path):
+                    os.remove(path)
+                downloaded = self.update_engine.download_apk(
+                    info["download_url"], info["sha256"], path
+                )
+                if not isinstance(downloaded, dict) or not downloaded.get("path"):
+                    raise RuntimeError("Downloader did not return a verified APK.")
+                path = str(downloaded["path"])
+                valid, message = self.update_engine.verify_file(path, info["sha256"])
+                if not valid:
+                    raise RuntimeError(message)
+                Clock.schedule_once(lambda dt: self._open_laiba_system_installer(path, info), 0)
+            except Exception as exc:
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+                message = str(exc)
+                Clock.schedule_once(lambda dt, msg=message: self._finish_update_error(msg), 0)
+        Thread(target=worker, daemon=True).start()
+
+    def _open_laiba_system_installer(self, apk_path, info):
+        try:
+            self.update_engine.mark_update_pending(
+                info["latest_version"], apk_path, info["sha256"]
+            )
+            opened = bool(self.media_bridge.install_apk(apk_path))
+            if not opened:
+                self.update_engine.save_update_state({
+                    "status": "failed",
+                    "reason": "Android system installer could not be opened."
+                })
+                self.update_in_progress = False
+                self._update_notice(
+                    "Android could not open the installer. The current app remains unchanged."
+                )
+                return
+            self.update_in_progress = False
+            self._update_notice(
+                "Android installer opened. Confirm installation there. "
+                "Laiba will verify the installed version on next launch."
+            )
+        except Exception as exc:
+            self.update_in_progress = False
+            try:
+                self.update_engine.save_update_state({
+                    "status": "failed", "reason": str(exc)[:250]
+                })
+            except Exception:
+                pass
+            self._update_notice("Installer error: " + str(exc)[:250])
+
+
     def on_pause(self):
         try:
             self.media_bridge.stop_listening()
@@ -1178,6 +1311,14 @@ class LaibaKivyApp(App):
         return True
 
     def on_resume(self):
+        try:
+            state = self.update_engine.resolve_update_state()
+            if state.get("status") in ("confirmed", "failed"):
+                Clock.schedule_once(lambda dt, st=state: self._update_notice(
+                    "Update " + st["status"] + (": " + st.get("reason", "") if st.get("reason") else ".")
+                ), 0)
+        except Exception:
+            pass
         try:
             if getattr(self, "voice_active", False) and not getattr(self, "voice_processing", False):
                 Clock.schedule_once(lambda dt: self.media_bridge._restart_listening(), 0.7)

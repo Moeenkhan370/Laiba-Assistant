@@ -3,18 +3,20 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import urllib.request
 from urllib.parse import urlparse
 from config import CURRENT_CONFIG
 
 
 class SelfUpdateEngine:
-    def __init__(self, current_version=None, update_url=None, timeout=12):
+    def __init__(self, current_version=None, update_url=None, timeout=12, state_path=None):
         self.version = current_version or CURRENT_CONFIG.get("VERSION", "1.0.0")
         self.update_url = update_url or CURRENT_CONFIG.get("UPDATE_SERVER_URL", "")
         self.timeout = timeout
         self.is_checking = False
         self.auto_update_enabled = False
+        self.state_path = state_path
 
     @staticmethod
     def _version_tuple(value):
@@ -62,18 +64,25 @@ class SelfUpdateEngine:
             current_tuple = self._version_tuple(self.version)
             latest_tuple = self._version_tuple(latest)
 
+            available = latest_tuple > current_tuple
             apk_url = manifest.get("apk_url")
-            if apk_url is not None:
-                apk_url = self._https_url(apk_url, "APK URL")
-
             sha256 = manifest.get("sha256")
-            if sha256 is not None:
+            if available:
+                apk_url = self._https_url(apk_url, "APK URL")
                 if not isinstance(sha256, str) or not re.fullmatch(
                     r"[0-9a-fA-F]{64}", sha256
                 ):
-                    raise ValueError("Manifest SHA-256 must contain exactly 64 hex characters.")
+                    raise ValueError(
+                        "A valid 64-character SHA-256 digest is required."
+                    )
+            elif apk_url is not None:
+                apk_url = self._https_url(apk_url, "APK URL")
+            if sha256 is not None and (
+                not isinstance(sha256, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", sha256)
+            ):
+                raise ValueError("Manifest SHA-256 must contain exactly 64 hex characters.")
 
-            available = latest_tuple > current_tuple
             return {
                 "status": "ok",
                 "update_available": available,
@@ -95,6 +104,62 @@ class SelfUpdateEngine:
         finally:
             self.is_checking = False
 
+    def download_apk(self, url, expected_sha256, destination,
+                     max_bytes=512 * 1024 * 1024):
+        url = self._https_url(url, "APK URL")
+        if not isinstance(expected_sha256, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", expected_sha256
+        ):
+            raise ValueError("A valid SHA-256 digest is required.")
+
+        class HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if urlparse(newurl).scheme.lower() != "https":
+                    raise ValueError("HTTPS downgrade redirect rejected.")
+                return super().redirect_request(
+                    req, fp, code, msg, headers, newurl
+                )
+
+        destination = os.path.abspath(os.fspath(destination))
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        temporary = None
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "LaibaAssistant-Updater/1.0"}
+            )
+            opener = urllib.request.build_opener(HTTPSRedirectHandler)
+            with opener.open(request, timeout=self.timeout) as response:
+                if urlparse(response.geturl()).scheme.lower() != "https":
+                    raise ValueError("Insecure final download URL.")
+                with tempfile.NamedTemporaryFile(
+                    mode="wb", dir=os.path.dirname(destination),
+                    prefix=".laiba-update-", suffix=".part", delete=False
+                ) as output:
+                    temporary = output.name
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValueError("APK exceeds download size limit.")
+                        digest.update(chunk)
+                        output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+
+            actual = digest.hexdigest()
+            if actual.lower() != expected_sha256.lower():
+                raise ValueError("APK SHA-256 mismatch; installation blocked.")
+            os.replace(temporary, destination)
+            temporary = None
+            return {"path": destination, "sha256": actual, "bytes": total}
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+
     @staticmethod
     def verify_file(path, expected_sha256):
         if not expected_sha256:
@@ -105,6 +170,58 @@ class SelfUpdateEngine:
                 digest.update(chunk)
         valid = digest.hexdigest().lower() == expected_sha256.lower()
         return valid, "SHA-256 verified." if valid else "SHA-256 mismatch."
+
+    def save_update_state(self, state):
+        if not self.state_path:
+            raise ValueError("Update state path is not configured.")
+        directory = os.path.dirname(os.path.abspath(self.state_path))
+        os.makedirs(directory, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".update-state-", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(state, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.state_path)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+
+    def load_update_state(self):
+        if not self.state_path or not os.path.isfile(self.state_path):
+            return {"status": "idle"}
+        try:
+            with open(self.state_path, encoding="utf-8") as stream:
+                state = json.load(stream)
+            if not isinstance(state, dict):
+                raise ValueError("Invalid update state.")
+            return state
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {"status": "failed", "reason": "Update state file is invalid."}
+
+    def mark_update_pending(self, target_version, apk_path, sha256):
+        if not target_version or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", str(target_version)):
+            raise ValueError("Invalid target version.")
+        self.save_update_state({
+            "status": "pending",
+            "current_version": self.version,
+            "target_version": str(target_version),
+            "apk_path": os.path.abspath(apk_path),
+            "sha256": str(sha256).lower()
+        })
+
+    def resolve_update_state(self, current_version=None):
+        state = self.load_update_state()
+        if state.get("status") != "pending":
+            return state
+        current = self._version_tuple(current_version or self.version)
+        target = self._version_tuple(state.get("target_version", ""))
+        state["status"] = "confirmed" if current == target else "failed"
+        state["installed_version"] = str(current_version or self.version)
+        if state["status"] == "failed":
+            state["reason"] = "App resumed without the target version; installation was cancelled or unsuccessful."
+        self.save_update_state(state)
+        return state
 
     def apply_update_patch(self, *args, **kwargs):
         return "Automatic source patching is disabled. Review and confirm changes through FileModifierEngine."

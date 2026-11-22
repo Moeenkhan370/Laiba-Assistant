@@ -45,6 +45,9 @@ jobs:
           echo "APT installation failed after 5 attempts."
           exit 1
 
+      - name: Run self-update tests
+        run: python -m unittest tests.test_self_update -v
+
       - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip setuptools wheel

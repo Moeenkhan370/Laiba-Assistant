@@ -1,3 +1,4 @@
+from kivy.utils import platform
 import os
 from threading import Thread
 from kivy.clock import Clock
@@ -323,6 +324,29 @@ class AndroidMediaBridge:
             Clock.schedule_once(
                 lambda dt: callback(state), 0
             )
+
+    def install_apk(self, apk_path):
+        if platform != "android":
+            self.message("APK installation is available on Android only.")
+            return False
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Installer = autoclass(
+                "com.moeen.laibaassistant.LaibaPackageInstaller"
+            )
+            activity = PythonActivity.mActivity
+            path = str(apk_path)
+            def launch():
+                try:
+                    Installer.install(activity, path)
+                except Exception as exc:
+                    self.message("APK installation failed: " + str(exc))
+            self._run_on_android_ui_thread(launch)
+            return True
+        except Exception as exc:
+            self.message("Installer unavailable: " + str(exc))
+            return False
 
     def shutdown(self):
         self.pending_speech = None
