@@ -87,6 +87,72 @@ class GitHubClient:
                 break
         return files
 
+    def commit_files(self, changes, message, approved=False):
+        """Atomically commit multiple approved text-file changes to the configured branch."""
+        if approved is not True:
+            raise PermissionError("Explicit user approval is required.")
+        if not isinstance(changes, list) or not changes:
+            raise ValueError("At least one file change is required.")
+
+        entries = []
+        seen = set()
+        for item in changes:
+            if not isinstance(item, dict):
+                raise ValueError("Invalid file change.")
+            path = str(item.get("path", "")).replace("\\\\", "/")
+            parts = path.split("/")
+            if (not path or path.startswith("/") or
+                    any(part in ("", ".", "..") for part in parts) or
+                    any(part.startswith(".") for part in parts) or
+                    not isinstance(item.get("content"), str)):
+                raise ValueError("Unsafe path or invalid file content.")
+            if path in seen:
+                raise ValueError("Duplicate file path.")
+            seen.add(path)
+            blob = self.request(
+                "/repos/" + self.repository + "/git/blobs",
+                method="POST",
+                json_body={"content": item["content"], "encoding": "utf-8"}
+            )
+            entries.append({
+                "path": path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob["sha"]
+            })
+
+        branch = quote(self.branch, safe="")
+        base = "/repos/" + self.repository
+        ref = self.request(base + "/git/ref/heads/" + branch)
+        parent_sha = ref["object"]["sha"]
+        parent = self.request(base + "/git/commits/" + parent_sha)
+
+        tree = self.request(
+            base + "/git/trees",
+            method="POST",
+            json_body={"base_tree": parent["tree"]["sha"], "tree": entries}
+        )
+        commit = self.request(
+            base + "/git/commits",
+            method="POST",
+            json_body={
+                "message": str(message)[:200],
+                "tree": tree["sha"],
+                "parents": [parent_sha]
+            }
+        )
+        self.request(
+            base + "/git/refs/heads/" + branch,
+            method="PATCH",
+            json_body={"sha": commit["sha"], "force": False}
+        )
+        return {
+            "status": "success",
+            "commit": commit["sha"],
+            "files": sorted(seen),
+            "branch": self.branch
+        }
+
     def dispatch_workflow(self, workflow_id, approved=False):
         if approved is not True:
             raise PermissionError("Explicit user approval is required.")
