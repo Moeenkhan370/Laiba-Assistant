@@ -1,5 +1,7 @@
 """Safe Gemini-assisted self-development engine for Laiba."""
 import ast
+import subprocess
+import sys
 import json
 import os
 import re
@@ -45,7 +47,7 @@ class DevelopmentEngine:
             raise ValueError("File type or name is protected.")
         return path
 
-    def inspect_project(self, max_files=40):
+    def inspect_project(self, max_files=None):
         files = []
         for current, dirs, names in os.walk(str(self.root)):
             dirs[:] = sorted(d for d in dirs if d not in self.EXCLUDED_DIRS and not d.startswith("."))
@@ -58,7 +60,7 @@ class DevelopmentEngine:
                     if path.stat().st_size > self.MAX_FILE_BYTES:
                         continue
                     files.append(str(rel))
-                    if len(files) >= max_files:
+                    if max_files is not None and len(files) >= max_files:
                         return files
                 except OSError:
                     continue
@@ -88,7 +90,7 @@ class DevelopmentEngine:
                 )
             except (OSError, UnicodeError, ValueError):
                 continue
-        return "\n".join(context)[:60000]
+        return "\n".join(context)[:250000]
 
     @staticmethod
     def _parse_json(response):
@@ -205,6 +207,14 @@ class DevelopmentEngine:
                     if os.path.exists(temp_name):
                         os.unlink(temp_name)
 
+            tests_dir = self.root / "tests"
+            if tests_dir.is_dir():
+                test = subprocess.run(
+                    [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+                    cwd=str(self.root), capture_output=True, text=True, timeout=180
+                )
+                if test.returncode:
+                    raise RuntimeError("Tests failed: " + (test.stdout + test.stderr)[-1200:])
             del self.pending[str(proposal_id)]
             return {
                 "status": "success",

@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 import requests
 from config import CURRENT_CONFIG, save_config
+from engines.github_client import GitHubClient
 from engines.command_router import CommandRouter
 from engines.development_engine import DevelopmentEngine
 from engines.file_modifier import FileModifierEngine
@@ -514,6 +515,16 @@ class ChatbotEngine:
                 return "منظور شدہ تبدیلی مکمل ہوگئی۔\nFiles: " + ", ".join(result.get("files", [])) + "\nBackup: " + str(result.get("backup"))
             return str(result.get("message", result))
         if intent == "development_propose":
+            token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
+            if token:
+                try:
+                    self.development_engine.github_client = GitHubClient(
+                        token,
+                        CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
+                        CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
+                    )
+                except Exception:
+                    self.development_engine.github_client = None
             result = self.development_engine.create_proposal(text)
             if result.get("status") != "proposal":
                 return str(result.get("message", result))
