@@ -37,11 +37,24 @@ class ChatbotEngine:
         self.self_updater = SelfUpdateEngine()
         self.threed_engine = ThreeDEngine()
         self.router = CommandRouter()
+        github_client = None
+        github_token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
+        if github_token:
+            try:
+                github_client = GitHubClient(
+                    github_token,
+                    CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
+                    CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
+                )
+            except Exception as exc:
+                print("[LAIBA] GitHub client initialization failed:", type(exc).__name__)
+
         self.development_engine = DevelopmentEngine(
             str(self.project_root),
             ai_generate=lambda prompt: self._gemini(
                 prompt, max_output_tokens=8192, include_history=False
-            )
+            ),
+            github_client=github_client
         )
         self.chat_history = []
         self.session = requests.Session()
