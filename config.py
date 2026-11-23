@@ -14,7 +14,7 @@ DEFAULT_CONFIG = {
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
     "GITHUB_TOKEN": "",
     "GITHUB_REPOSITORY": "Moeenkhan370/Laiba-Assistant",
-    "GITHUB_BRANCH": "laiba-self-development",
+    "GITHUB_BRANCH": "main",
     "GEMINI_API_KEYS": [],
     "GEMINI_MODEL": "",
     "GEMINI_MODEL_CANDIDATES": [],

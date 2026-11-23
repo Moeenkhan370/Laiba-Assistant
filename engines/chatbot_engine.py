@@ -46,7 +46,7 @@ class ChatbotEngine:
                 github_client = GitHubClient(
                     github_token,
                     CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
-                    CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
+                    CURRENT_CONFIG.get("GITHUB_BRANCH", "main")
                 )
             except Exception as exc:
                 print("[LAIBA] GitHub client initialization failed:", type(exc).__name__)
@@ -269,11 +269,6 @@ class ChatbotEngine:
 
     def export_project_zip(self):
         return self.create_whatsapp_zip()
-
-    def handle_buildozer_commands(self, query):
-        if any(term in query.lower() for term in ("build apk", "buildozer", "package apk")):
-            return "Build from the project root with: buildozer android debug. This project includes a Buildozer spec; successful APK creation still depends on a compatible ARM64/Ubuntu toolchain."
-        return None
 
     def _request_with_retry(self, method, url, **kwargs):
         retry_statuses = {429, 500, 502, 503, 504}
@@ -542,7 +537,7 @@ class ChatbotEngine:
     def _connect_development_github(self):
         token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
         repository = str(CURRENT_CONFIG.get("GITHUB_REPOSITORY", "")).strip()
-        branch = str(CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")).strip()
+        branch = str(CURRENT_CONFIG.get("GITHUB_BRANCH", "main")).strip()
         if not token:
             self.development_engine.github_client = None
             return False, "GitHub token is missing. Connect GitHub in Laiba Settings first."
@@ -796,7 +791,7 @@ class ChatbotEngine:
                 client = GitHubClient(
                     token,
                     CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
-                    CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
+                    CURRENT_CONFIG.get("GITHUB_BRANCH", "main")
                 )
                 result = client.dispatch_workflow(requested, approved=True)
                 return "Approved workflow dispatch result: " + str(result)
@@ -840,9 +835,6 @@ class ChatbotEngine:
             return "Project files: {}".format(", ".join(self.file_modifier.list_dir(".")))
         if intent == "open_link":
             return "Opening apps and websites requires the Android intent bridge; that integration is not yet enabled in this build."
-        build = self.handle_buildozer_commands(text)
-        if build: return build
-
         if voice_mode and not image_path:
             spoken_prompt = (
                 text +
