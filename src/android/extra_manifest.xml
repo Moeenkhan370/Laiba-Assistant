@@ -1,4 +1,5 @@
 <queries xmlns:android="http://schemas.android.com/apk/res/android">
+    <package android:name="com.google.android.tts" />
     <intent>
         <action android:name="android.speech.RecognitionService" />
     </intent>

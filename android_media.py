@@ -7,6 +7,9 @@ from kivy.uix.label import Label
 from engines.android_tts import AndroidNativeTTS
 from engines.runtime_diagnostics import get_diagnostics
 
+ANDROID_SPEECH_RECOGNIZER_CLASS = "android.speech.SpeechRecognizer"
+ANDROID_RECOGNIZER_INTENT_CLASS = "android.speech.RecognizerIntent"
+
 
 class _TTSInitListener:
     pass
@@ -633,7 +636,7 @@ class AndroidMediaBridge:
                 def onResults(self, results):
                     self.bridge.recognition_active = False
                     try:
-                        SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+                        SpeechRecognizer = autoclass(ANDROID_SPEECH_RECOGNIZER_CLASS)
                         matches = results.getStringArrayList(
                             SpeechRecognizer.RESULTS_RECOGNITION
                         )
@@ -676,9 +679,9 @@ class AndroidMediaBridge:
                     pass
 
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+            SpeechRecognizer = autoclass(ANDROID_SPEECH_RECOGNIZER_CLASS)
             Intent = autoclass("android.content.Intent")
-            RecognizerIntent = autoclass("android.speech.RecognizerIntent")
+            RecognizerIntent = autoclass(ANDROID_RECOGNIZER_INTENT_CLASS)
 
             activity = PythonActivity.mActivity
             self._voice_state("starting", "Starting Android speech recognition...")

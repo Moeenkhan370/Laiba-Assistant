@@ -4,6 +4,9 @@ from kivy.clock import Clock
 from kivy.utils import platform
 from engines.runtime_diagnostics import get_diagnostics
 
+GOOGLE_TTS_ENGINE_PACKAGE = "com.google.android.tts"
+ANDROID_TTS_CLASS = "android.speech.tts.TextToSpeech"
+
 
 class AndroidNativeTTS:
 
@@ -100,10 +103,19 @@ class AndroidNativeTTS:
                     engine._queue_completion(str(utterance_id or ""))
 
             Activity = autoclass("org.kivy.android.PythonActivity")
-            TTS = autoclass("android.speech.tts.TextToSpeech")
+            TTS = autoclass(ANDROID_TTS_CLASS)
 
             self.init_listener = InitListener()
-            self.tts = TTS(Activity.mActivity, self.init_listener)
+            self.tts = TTS(
+                Activity.mActivity,
+                self.init_listener,
+                GOOGLE_TTS_ENGINE_PACKAGE
+            )
+            print(
+                "LAIBA_TTS_REQUESTED_ENGINE:",
+                GOOGLE_TTS_ENGINE_PACKAGE,
+                flush=True
+            )
 
             self._completion_class = CompletionListener
 
@@ -122,7 +134,7 @@ class AndroidNativeTTS:
         try:
             from jnius import autoclass
 
-            TTS = autoclass("android.speech.tts.TextToSpeech")
+            TTS = autoclass(ANDROID_TTS_CLASS)
             print("LAIBA_TTS_INIT_STATUS:", status, flush=True)
             try:
                 print("LAIBA_TTS_ENGINE:", self.tts.getDefaultEngine(), flush=True)
@@ -289,7 +301,7 @@ class AndroidNativeTTS:
         try:
             from jnius import autoclass
 
-            TTS = autoclass("android.speech.tts.TextToSpeech")
+            TTS = autoclass(ANDROID_TTS_CLASS)
             chunks = self._split_text(text)
 
             if not chunks:
