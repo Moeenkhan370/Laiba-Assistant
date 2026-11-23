@@ -3,8 +3,10 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import tempfile
 import urllib.request
+import certifi
 from urllib.parse import urlparse
 from config import CURRENT_CONFIG
 
@@ -34,6 +36,11 @@ class SelfUpdateEngine:
             raise ValueError("{} must use HTTPS.".format(field_name))
         return value.strip()
 
+    @staticmethod
+    def _ssl_context():
+        """Use certifi CA roots with SSL verification enabled."""
+        return ssl.create_default_context(cafile=certifi.where())
+
     def check_for_updates(self):
         if not self.update_url:
             return {"status": "not_configured", "update_available": False,
@@ -46,7 +53,7 @@ class SelfUpdateEngine:
                 manifest_url,
                 headers={"User-Agent": "LaibaAssistant-Updater/1.0"}
             )
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context()) as response:
                 if response.status != 200:
                     raise RuntimeError(
                         "Manifest server returned HTTP {}".format(response.status)
@@ -129,7 +136,10 @@ class SelfUpdateEngine:
             request = urllib.request.Request(
                 url, headers={"User-Agent": "LaibaAssistant-Updater/1.0"}
             )
-            opener = urllib.request.build_opener(HTTPSRedirectHandler)
+            opener = urllib.request.build_opener(
+                HTTPSRedirectHandler,
+                urllib.request.HTTPSHandler(context=self._ssl_context())
+            )
             with opener.open(request, timeout=self.timeout) as response:
                 if urlparse(response.geturl()).scheme.lower() != "https":
                     raise ValueError("Insecure final download URL.")
