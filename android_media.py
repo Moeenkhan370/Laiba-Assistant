@@ -122,7 +122,7 @@ class AndroidMediaBridge:
             import requests
             import re
 
-            model = "gemini-2.5-flash-preview-tts"
+            model = "gemini-3.8-flash-lite-tts"
             url = (
                 "https://generativelanguage.googleapis.com/v1beta/"
                 "models/" + model + ":generateContent"
@@ -184,16 +184,17 @@ class AndroidMediaBridge:
                         last_error = "Gemini returned no audio data."
                         continue
 
-                    pcm = base64.b64decode(inline["data"], validate=True)
+                    audio_bytes = base64.b64decode(
+                        inline["data"], validate=True
+                    )
                     mime = str(
                         inline.get("mimeType") or
-                        inline.get("mime_type") or
-                        "audio/pcm;rate=24000"
+                        inline.get("mime_type") or ""
                     )
-                    rate_match = re.search(r"rate=(\d+)", mime)
-                    sample_rate = int(rate_match.group(1)) if rate_match else 24000
 
-                    if not pcm:
+                    sample_rate = 24000
+
+                    if not audio_bytes:
                         last_error = "Gemini returned empty audio."
                         continue
 
@@ -205,16 +206,22 @@ class AndroidMediaBridge:
                         )
                     )
 
-                    with wave.open(path, "wb") as output:
-                        output.setnchannels(1)
-                        output.setsampwidth(2)
-                        output.setframerate(sample_rate)
-                        output.writeframes(pcm)
+                    if audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+                        with open(path, "wb") as output:
+                            output.write(audio_bytes)
+                    else:
+                        rate_match = re.search(r"rate=(\d+)", mime)
+                        sample_rate = int(rate_match.group(1)) if rate_match else 24000
+                        with wave.open(path, "wb") as output:
+                            output.setnchannels(1)
+                            output.setsampwidth(2)
+                            output.setframerate(sample_rate)
+                            output.writeframes(audio_bytes)
 
                     print(
                         "LAIBA_GEMINI_TTS_GENERATION: PASS",
                         "model=", model,
-                        "bytes=", len(pcm),
+                        "bytes=", len(audio_bytes),
                         "rate=", sample_rate,
                         flush=True
                     )
