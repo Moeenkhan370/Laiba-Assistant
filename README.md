@@ -10,15 +10,17 @@ This is a repair of the supplied Laiba project, not a replacement application. T
 - Conservative command routing for update checks, ZIP export, 3D status, and project file listing.
 - Project-root constrained file operations, Python syntax validation, backups, atomic writes, and confirmation gates.
 - OBJ, STL (binary and ASCII), and ASCII PLY mesh parsing; cube/pyramid geometry and rotation.
-- Real configured-manifest update checking and SHA-256 file verification helper. APK installation is intentionally not automatic.
+- HTTPS update-manifest checking with semantic version comparison and SHA-256 APK verification.
+- Android APK installation handoff through FileProvider and the Android package installer; installation always requires Android user confirmation.
 - ZIP export excludes build caches, backups, virtual environments, archives, and local credentials.
 
 ## Not implemented / not claimed
 
 - Continuous Urdu speech recognition, female TTS, wake word, and background microphone service. These need a tested Android native speech/audio bridge and runtime permission flow.
 - Camera preview/capture and Android image picker. The Gemini request engine can analyze an image path supplied by a future Android picker integration.
-- GLTF/GLB parsing, binary PLY, cryptographic update-signature verification, APK installation UI, rollback of installed APKs, and unrestricted Android system control.
-- The update manifest URL is blank by default. Configure a real HTTPS JSON manifest before using update checks.
+- GLTF/GLB parsing, binary PLY, independent cryptographic update-signature verification, rollback of installed APKs, and unrestricted Android system control.
+- The updater verifies the APK against the SHA-256 value in the HTTPS manifest. This detects corruption, but does not independently authenticate the manifest publisher with a digital signature.
+- If Android asks for permission to install unknown apps, enable it for Laiba in Android Settings, return to Laiba, and retry the update.
 
 ## Gemini configuration
 

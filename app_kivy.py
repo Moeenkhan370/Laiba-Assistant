@@ -129,7 +129,7 @@ class LaibaKivyApp(App):
         self.chatbot = ChatbotEngine()
         self.media_bridge = AndroidMediaBridge(self)
         self.chatbot.external_opener = self.media_bridge.open_external_url
-        self.update_engine = SelfUpdateEngine(current_version=CURRENT_CONFIG.get("VERSION", "1.0.3"), state_path=os.path.join(self.user_data_dir, "laiba_update_state.json"))
+        self.update_engine = SelfUpdateEngine(current_version=CURRENT_CONFIG.get("VERSION", "1.0.4"), state_path=os.path.join(self.user_data_dir, "laiba_update_state.json"))
         self.update_in_progress = False
         self.threed_engine = ThreeDEngine()
         self.chat_history = self.load_history()

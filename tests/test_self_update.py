@@ -149,5 +149,28 @@ class SelfUpdateTests(unittest.TestCase):
             "https://example.com/update.json"
         )
 
+
+    def test_rejects_manifest_https_downgrade_redirect(self):
+        engine = SelfUpdateEngine(
+            "1.0.0", "https://example.com/update.json"
+        )
+        response = MagicMock()
+        response.status = 200
+        response.geturl.return_value = "http://example.com/update.json"
+        response.read.return_value = json.dumps({
+            "version": "1.1.0",
+            "apk_url": "https://example.com/app.apk",
+            "sha256": "0" * 64
+        }).encode()
+
+        with patch(
+            "engines.self_update.urllib.request.urlopen"
+        ) as urlopen:
+            urlopen.return_value.__enter__.return_value = response
+            result = engine.check_for_updates()
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("downgrade", result["changelog"].lower())
+
 if __name__ == "__main__":
     unittest.main()

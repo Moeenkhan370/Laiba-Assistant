@@ -1,4 +1,4 @@
-"""Honest update checker: fetches a configured JSON manifest; never self-installs APKs."""
+"""Validate HTTPS update manifests, verify APK hashes, and request user-approved Android installation."""
 import hashlib
 import json
 import os
@@ -59,6 +59,13 @@ class SelfUpdateEngine:
                 headers={"User-Agent": "LaibaAssistant-Updater/1.0"}
             )
             with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context()) as response:
+                final_url = response.geturl()
+                if (
+                    isinstance(final_url, str)
+                    and final_url
+                    and urlparse(final_url).scheme.lower() != "https"
+                ):
+                    raise ValueError("Manifest HTTPS downgrade redirect rejected.")
                 if response.status != 200:
                     raise RuntimeError(
                         "Manifest server returned HTTP {}".format(response.status)
