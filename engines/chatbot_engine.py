@@ -15,10 +15,12 @@ from engines.development_engine import DevelopmentEngine
 from engines.file_modifier import FileModifierEngine
 from engines.self_update import SelfUpdateEngine
 from engines.threed_engine import ThreeDEngine
+from engines.runtime_diagnostics import get_diagnostics
 
 
 class ChatbotEngine:
     def __init__(self, project_root=None):
+        self.diagnostics = get_diagnostics()
         self.project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
         self.api_keys = list(dict.fromkeys(str(k).strip() for k in CURRENT_CONFIG.get("GEMINI_API_KEYS", []) if str(k).strip()))
         self.api_key = str(CURRENT_CONFIG.get("GEMINI_API_KEY", "")).strip()
@@ -413,6 +415,13 @@ class ChatbotEngine:
                             status = response.status_code
                             detail = self._safe_error(response)
                             response.close()
+                            if self.diagnostics:
+                                self.diagnostics.record(
+                                    "gemini", "HTTP response",
+                                    "model={} status={} {}".format(
+                                        model, status, detail[:140]
+                                    ), severity="ERROR"
+                                )
                             errors.append("{} HTTP {}: {}".format(
                                 model, status, detail[:140]
                             ))
@@ -483,22 +492,38 @@ class ChatbotEngine:
                         return answer
 
                     except (requests.Timeout, requests.ConnectionError) as exc:
+                        if self.diagnostics:
+                            self.diagnostics.record_exception(
+                                "gemini", "Network connection failure", exc
+                            )
                         errors.append("{} connection failure: {}".format(
                             model, self._redact_api_keys(exc)[:120]
                         ))
                         continue
                     except requests.RequestException as exc:
+                        if self.diagnostics:
+                            self.diagnostics.record_exception(
+                                "gemini", "HTTP request exception", exc
+                            )
                         errors.append("{} request failure: {}".format(
                             model, self._redact_api_keys(exc)[:120]
                         ))
                         continue
                     except (ValueError, KeyError, IndexError, TypeError) as exc:
+                        if self.diagnostics:
+                            self.diagnostics.record_exception(
+                                "gemini", "Invalid API response", exc
+                            )
                         errors.append("{} invalid response ({})".format(
                             model, type(exc).__name__
                         ))
                         continue
 
             except Exception as exc:
+                if self.diagnostics:
+                    self.diagnostics.record_exception(
+                        "gemini", "Model discovery failed", exc
+                    )
                 errors.append("Model discovery failed: {}".format(
                     self._redact_api_keys(exc)[:140]
                 ))

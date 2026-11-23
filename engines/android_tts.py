@@ -2,12 +2,14 @@
 
 from kivy.clock import Clock
 from kivy.utils import platform
+from engines.runtime_diagnostics import get_diagnostics
 
 
 class AndroidNativeTTS:
 
     def __init__(self, state_callback):
         self.state_callback = state_callback
+        self.diagnostics = get_diagnostics()
         self.tts = None
         self.ready = False
         self.failed = False
@@ -21,6 +23,10 @@ class AndroidNativeTTS:
         self._initialize()
 
     def _state(self, state):
+        if self.diagnostics and state == "error":
+            self.diagnostics.record(
+                "tts", "Native TTS state error", severity="ERROR"
+            )
         try:
             self.state_callback(state)
         except Exception as exc:
@@ -105,6 +111,10 @@ class AndroidNativeTTS:
 
         except Exception as exc:
             self.failed = True
+            if self.diagnostics:
+                self.diagnostics.record_exception(
+                    "tts", "Native TTS initialization failed", exc
+                )
             print("LAIBA_PY_TTS_INIT_ERROR:", repr(exc), flush=True)
             self._state("error")
 
@@ -113,6 +123,11 @@ class AndroidNativeTTS:
             from jnius import autoclass
 
             TTS = autoclass("android.speech.tts.TextToSpeech")
+            print("LAIBA_TTS_INIT_STATUS:", status, flush=True)
+            try:
+                print("LAIBA_TTS_ENGINE:", self.tts.getDefaultEngine(), flush=True)
+            except Exception as engine_exc:
+                print("LAIBA_TTS_ENGINE_INFO_ERROR:", repr(engine_exc), flush=True)
 
             if status != TTS.SUCCESS or self.tts is None:
                 raise RuntimeError(
@@ -133,6 +148,11 @@ class AndroidNativeTTS:
 
             for locale in locales:
                 availability = self.tts.isLanguageAvailable(locale)
+                print(
+                    "LAIBA_TTS_LOCALE_CHECK:",
+                    str(locale), "availability=", availability,
+                    flush=True
+                )
 
                 if availability >= TTS.LANG_AVAILABLE:
                     result = self.tts.setLanguage(locale)
@@ -142,8 +162,20 @@ class AndroidNativeTTS:
                         print(
                             "LAIBA_PY_TTS_LANGUAGE:",
                             str(locale),
+                            "setLanguage_result=", result,
                             flush=True
                         )
+                        try:
+                            voice = self.tts.getVoice()
+                            if voice:
+                                print(
+                                    "LAIBA_TTS_SELECTED_VOICE:",
+                                    str(voice.getName()),
+                                    str(voice.getLocale()),
+                                    flush=True
+                                )
+                        except Exception as voice_exc:
+                            print("LAIBA_TTS_VOICE_INFO_ERROR:", repr(voice_exc), flush=True)
                         break
 
             if not language_set:
@@ -169,6 +201,20 @@ class AndroidNativeTTS:
                 audio_result = self.tts.setAudioAttributes(
                     builder.build()
                 )
+                print("LAIBA_TTS_AUDIO_ATTRIBUTES_RESULT:", audio_result, flush=True)
+                try:
+                    Activity = autoclass("org.kivy.android.PythonActivity")
+                    AudioManager = autoclass("android.media.AudioManager")
+                    manager = Activity.mActivity.getSystemService("audio")
+                    print(
+                        "LAIBA_TTS_MEDIA_VOLUME:",
+                        int(manager.getStreamVolume(AudioManager.STREAM_MUSIC)),
+                        "/",
+                        int(manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)),
+                        flush=True
+                    )
+                except Exception as volume_exc:
+                    print("LAIBA_TTS_VOLUME_INFO_ERROR:", repr(volume_exc), flush=True)
 
                 if audio_result != TTS.SUCCESS:
                     print(
@@ -212,6 +258,10 @@ class AndroidNativeTTS:
             self.ready = False
             self.failed = True
             self.pending_speech = None
+            if self.diagnostics:
+                self.diagnostics.record_exception(
+                    "tts", "Native TTS setup failed", exc
+                )
 
             print(
                 "LAIBA_PY_TTS_SETUP_ERROR:",
@@ -271,6 +321,13 @@ class AndroidNativeTTS:
                     utterance_id
                 )
 
+                print(
+                    "LAIBA_TTS_SPEAK_RESULT:",
+                    utterance_id,
+                    "result=", result,
+                    "characters=", len(chunk),
+                    flush=True
+                )
                 if result != TTS.SUCCESS:
                     raise RuntimeError(
                         "Android TTS speak() returned: " + str(result)
@@ -284,10 +341,15 @@ class AndroidNativeTTS:
             )
 
         except Exception as exc:
+            if self.diagnostics:
+                self.diagnostics.record_exception(
+                    "tts", "Native TTS speak failed", exc
+                )
             print("LAIBA_PY_TTS_SPEAK_ERROR:", repr(exc), flush=True)
             self._fail()
 
     def _queue_completion(self, utterance_id):
+        print("LAIBA_TTS_COMPLETION_CALLBACK:", utterance_id, flush=True)
         try:
             Clock.schedule_once(
                 lambda dt: self._handle_completion(utterance_id), 0

@@ -5,6 +5,7 @@ from kivy.clock import Clock
 from kivy.metrics import dp
 from kivy.uix.label import Label
 from engines.android_tts import AndroidNativeTTS
+from engines.runtime_diagnostics import get_diagnostics
 
 
 class _TTSInitListener:
@@ -17,6 +18,7 @@ class AndroidMediaBridge:
 
     def __init__(self, app):
         self.app = app
+        self.diagnostics = get_diagnostics()
         self.activity_bound = False
         self.camera_output_uri = None
         self.tts = None
@@ -185,12 +187,20 @@ class AndroidMediaBridge:
                             "Android permission denied: " + details
                         )
                 except Exception as exc:
+                    if self.diagnostics:
+                        self.diagnostics.record_exception(
+                            "permission", "Permission callback failed", exc
+                        )
                     self.message(
                         "Permission callback error: " + str(exc)
                     )
             print("LAIBA_MIC_PERMISSION: requesting", names, flush=True)
             request_permissions(names, result)
         except Exception as exc:
+            if self.diagnostics:
+                self.diagnostics.record_exception(
+                    "permission", "Android permission request failed", exc
+                )
             print("LAIBA_PERMISSION_EXCEPTION:", repr(exc), flush=True)
             self._voice_state("error", "Android permission error: " + str(exc))
             self.message("Android permission error: " + str(exc))
@@ -438,6 +448,11 @@ class AndroidMediaBridge:
         self.activity_bound = True
 
     def _voice_state(self, state, detail=""):
+        if self.diagnostics and state in ("error", "retrying", "no_match"):
+            self.diagnostics.record(
+                "speech", state, detail,
+                severity="ERROR" if state == "error" else "WARNING"
+            )
         print(
             "LAIBA_VOICE_STATE:", state, str(detail), flush=True
         )
@@ -464,6 +479,10 @@ class AndroidMediaBridge:
                 try:
                     callback()
                 except Exception as exc:
+                    if bridge.diagnostics:
+                        bridge.diagnostics.record_exception(
+                            "android_callback", "UI thread callback failed", exc
+                        )
                     print("LAIBA_ANDROID_UI_ERROR:", repr(exc), flush=True)
                 finally:
                     try:

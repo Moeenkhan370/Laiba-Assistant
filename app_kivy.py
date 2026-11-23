@@ -25,6 +25,7 @@ from engines.github_client import GitHubClient
 from engines.threed_engine import ThreeDEngine
 from android_media import AndroidMediaBridge
 from engines.self_update import SelfUpdateEngine
+from engines.runtime_diagnostics import configure_diagnostics
 
 # Set Window dark background
 Window.clearcolor = (0, 0, 0, 1)
@@ -124,6 +125,7 @@ class LaibaKivyApp(App):
         CURRENT_CONFIG.update(saved_config)
 
         self.title = CURRENT_CONFIG.get("APP_NAME", "Laiba Assistant")
+        self.diagnostics = configure_diagnostics(self.user_data_dir)
         self.chatbot = ChatbotEngine()
         self.media_bridge = AndroidMediaBridge(self)
         self.update_engine = SelfUpdateEngine(current_version=CURRENT_CONFIG.get("VERSION", "1.0.3"), state_path=os.path.join(self.user_data_dir, "laiba_update_state.json"))
@@ -399,6 +401,7 @@ class LaibaKivyApp(App):
 
         for label, callback, color in [
             ("OPEN VOICE MODE", self.open_voice_mode, (0,0.35,0.55,1)),
+            ("RUNTIME DIAGNOSTICS", self.open_runtime_diagnostics, (0.02,0.48,0.38,1)),
             ("GEMINI API KEYS", self.open_api_keys, (0.32,0.12,0.48,1)),
             ("GITHUB TOKEN / WORKFLOWS", self.open_github_settings, (0.02,0.38,0.32,1)),
             ("CHECK FOR UPDATES", self.check_laiba_updates, (0.02,0.42,0.52,1)),
@@ -438,6 +441,251 @@ class LaibaKivyApp(App):
             background_color=(0.18,0.22,0.32,1))
         close.bind(on_release=popup.dismiss)
         content.add_widget(close)
+        popup.open()
+
+
+    def open_runtime_diagnostics(self, *args):
+        layout = BoxLayout(
+            orientation="vertical", padding=dp(10), spacing=dp(7)
+        )
+        status = Label(
+            text="Runtime monitor ready.",
+            size_hint_y=None, height=dp(42),
+            color=(0.35, 0.95, 0.75, 1)
+        )
+        log_view = Label(
+            text="", size_hint_y=None, halign="left", valign="top",
+            color=(0.82, 0.91, 1, 1), font_size="11sp"
+        )
+        log_view.bind(
+            width=lambda obj, value: setattr(obj, "text_size", (value, None))
+        )
+        log_view.bind(
+            texture_size=lambda obj, value: setattr(obj, "height", value[1])
+        )
+        scroll = ScrollView(do_scroll_x=False, bar_width=dp(3))
+        scroll.add_widget(log_view)
+
+        popup = Popup(
+            title="Laiba Runtime Diagnostics",
+            content=layout, size_hint=(0.97, 0.93)
+        )
+
+        def refresh(*_):
+            entries = self.diagnostics.recent(35)
+            if not entries:
+                log_view.text = "No runtime errors recorded."
+            else:
+                rows = []
+                for item in entries:
+                    rows.append(
+                        "[{severity}] {time}\n{category}: {event}\n{details}".format(
+                            **item
+                        )
+                    )
+                    if item.get("traceback"):
+                        rows.append(item["traceback"][-1800:])
+                    rows.append("")
+                log_view.text = "\n".join(rows)
+            log_view.texture_update()
+            scroll.scroll_y = 0
+
+        def run_tests(*_):
+            status.text = "Running system checks..."
+            status.color = (1, 0.8, 0.3, 1)
+
+            def worker():
+                checks = []
+
+                def add(name, ok, detail):
+                    result = "PASS" if ok else "FAIL"
+                    checks.append("{}: {} - {}".format(name, result, detail))
+                    self.diagnostics.record(
+                        "system_test", name, detail,
+                        severity="INFO" if ok else "ERROR"
+                    )
+
+                try:
+                    probe = os.path.join(
+                        self.user_data_dir, ".laiba_diag_probe"
+                    )
+                    with open(probe, "w", encoding="utf-8") as stream:
+                        stream.write("ok")
+                    os.remove(probe)
+                    add("Private storage", True, "App storage is writable")
+                except Exception as exc:
+                    add("Private storage", False, type(exc).__name__)
+
+                bridge = getattr(self, "media_bridge", None)
+                native = getattr(bridge, "native_tts", None)
+                if native is not None:
+                    ready = bool(getattr(native, "ready", False))
+                    failed = bool(getattr(native, "failed", False))
+                    add(
+                        "Android Native TTS", ready,
+                        "ready={}, failed={}".format(ready, failed)
+                    )
+                else:
+                    add("Android Native TTS", False, "TTS bridge unavailable")
+
+                try:
+                    from kivy.utils import platform
+                    if platform == "android":
+                        from jnius import autoclass
+                        Activity = autoclass(
+                            "org.kivy.android.PythonActivity"
+                        )
+                        SpeechRecognizer = autoclass(
+                            "android.speech.SpeechRecognizer"
+                        )
+                        available = bool(
+                            SpeechRecognizer.isRecognitionAvailable(
+                                Activity.mActivity
+                            )
+                        )
+                        add(
+                            "Speech recognition service", available,
+                            "Android recognition service availability"
+                        )
+                        try:
+                            from android.permissions import check_permission
+                            granted = bool(check_permission(
+                                "android.permission.RECORD_AUDIO"
+                            ))
+                            add(
+                                "Microphone permission", granted,
+                                "RECORD_AUDIO permission granted={}".format(
+                                    granted
+                                )
+                            )
+                        except Exception as exc:
+                            add(
+                                "Microphone permission", False,
+                                "Permission check unavailable: " +
+                                type(exc).__name__
+                            )
+                    else:
+                        add(
+                            "Android speech service", True,
+                            "Not applicable on this platform"
+                        )
+                except Exception as exc:
+                    add(
+                        "Speech recognition service", False,
+                        type(exc).__name__ + ": " + str(exc)[:160]
+                    )
+
+                try:
+                    if not (
+                        getattr(self.chatbot, "api_key", None)
+                        or getattr(self.chatbot, "api_keys", [])
+                    ):
+                        add("Gemini API", False, "No API key configured")
+                    else:
+                        tester = getattr(
+                            self.chatbot, "test_api_connection", None
+                        )
+                        if callable(tester):
+                            result = tester()
+                            if isinstance(result, dict):
+                                ok = bool(result.get("ok"))
+                                detail = str(
+                                    result.get("message", "Connection test")
+                                )[:180]
+                            else:
+                                ok = bool(result)
+                                detail = "Gemini connection test completed"
+                            add("Gemini API", ok, detail)
+                        else:
+                            add(
+                                "Gemini API", True,
+                                "API key configured; live test unavailable"
+                            )
+                except Exception as exc:
+                    self.diagnostics.record_exception(
+                        "gemini", "Diagnostic connection test failed", exc
+                    )
+                    add("Gemini API", False, type(exc).__name__)
+
+                summary = "\n".join(checks)
+                Clock.schedule_once(
+                    lambda dt: (
+                        setattr(status, "text", summary),
+                        setattr(
+                            status, "color",
+                            (0.35, 0.95, 0.75, 1)
+                            if all(": PASS -" in line for line in checks)
+                            else (1, 0.72, 0.28, 1)
+                        ),
+                        refresh()
+                    ), 0
+                )
+
+            Thread(target=worker, daemon=True).start()
+
+        actions = GridLayout(
+            cols=2, spacing=dp(6), size_hint_y=None, height=dp(100)
+        )
+
+        def add_action(label, callback, color):
+            button = Button(
+                text=label, background_normal="",
+                background_color=color, font_size="12sp"
+            )
+            button.bind(on_release=callback)
+            actions.add_widget(button)
+
+        add_action(
+            "TEST ALL SYSTEMS", run_tests, (0.02, 0.42, 0.55, 1)
+        )
+
+        def copy_logs(*_):
+            try:
+                Clipboard.copy(self.diagnostics.format_text())
+                status.text = "Logs copied to clipboard."
+            except Exception as exc:
+                status.text = "Copy failed: " + type(exc).__name__
+
+        add_action(
+            "COPY LOGS", copy_logs, (0.12, 0.32, 0.48, 1)
+        )
+
+        def export_report(*_):
+            try:
+                path = self.diagnostics.export_report()
+                status.text = "Diagnostic report saved:\n" + path
+            except Exception as exc:
+                status.text = "Export failed: " + type(exc).__name__
+
+        add_action(
+            "EXPORT REPORT", export_report, (0.08, 0.42, 0.34, 1)
+        )
+
+        def clear_logs(*_):
+            self.diagnostics.clear()
+            status.text = "Runtime history cleared."
+            refresh()
+
+        add_action(
+            "CLEAR HISTORY", clear_logs, (0.48, 0.16, 0.20, 1)
+        )
+
+        close = Button(
+            text="CLOSE", size_hint_y=None, height=dp(42),
+            background_normal="", background_color=(0.18, 0.22, 0.32, 1)
+        )
+        close.bind(on_release=popup.dismiss)
+
+        layout.add_widget(status)
+        layout.add_widget(actions)
+        layout.add_widget(scroll)
+        layout.add_widget(close)
+
+        refresh()
+        refresh_event = Clock.schedule_interval(refresh, 1.5)
+        popup.bind(
+            on_dismiss=lambda *_: refresh_event.cancel()
+        )
         popup.open()
 
     def _scroll_chat_to_bottom(self, *args):
@@ -753,6 +1001,9 @@ class LaibaKivyApp(App):
             try:
                 result = self.chatbot.process_message(text)
             except Exception as exc:
+                self.diagnostics.record_exception(
+                    "chat", "Message processing failed", exc
+                )
                 result = "Network or AI error: " + str(exc)
             Clock.schedule_once(
                 lambda dt: self.finish_reply(result, thinking), 0
@@ -784,6 +1035,9 @@ class LaibaKivyApp(App):
             try:
                 result = self.chatbot.process_message(text)
             except Exception as exc:
+                self.diagnostics.record_exception(
+                    "chat", "Message processing failed", exc
+                )
                 result = "Network or AI error: " + str(exc)
 
             Clock.schedule_once(
@@ -793,6 +1047,11 @@ class LaibaKivyApp(App):
         Thread(target=worker, daemon=True).start()
 
     def on_voice_bridge_state(self, state, detail=""):
+        if state in ("error", "retrying", "no_match"):
+            self.diagnostics.record(
+                "speech", state, detail,
+                severity="ERROR" if state == "error" else "WARNING"
+            )
         if not getattr(self, "voice_active", False):
             return
 
@@ -839,6 +1098,11 @@ class LaibaKivyApp(App):
             self.voice_mic_button.text = "RETRY MIC"
 
     def on_tts_state(self, state):
+        if state == "error":
+            self.diagnostics.record(
+                "tts", "Playback callback reported error",
+                severity="ERROR"
+            )
         if not getattr(self, "voice_active", False):
             return
 
