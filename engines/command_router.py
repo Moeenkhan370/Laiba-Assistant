@@ -64,10 +64,12 @@ class CommandRouter:
         if self._has(q, (
             "github actions status", "github action status",
             "github build status", "check github build",
+            "github actions ka kya status hai",
             "build status", "check build", "build complete",
             "build completed", "latest build", "workflow status",
             "workflow runs", "apk status", "apk ready",
-            "apk complete", "apk tayar", "build ka haal",
+            "apk complete", "apk tayar", "apk ban gayi", "apk ban gai",
+            "build ka haal",
             "build ka status", "بلڈ اسٹیٹس", "بلڈ چیک",
             "بلڈ مکمل", "بلڈ ہو گئی", "بلڈ کا حال",
             "اے پی کے اسٹیٹس", "اے پی کے تیار",
@@ -106,6 +108,7 @@ class CommandRouter:
         # GitHub commit history.
         if self._has(q, (
             "latest commits", "last commits", "recent commits",
+            "show latest",
             "show commits", "commit history", "git history",
             "commits dikhao", "commits parho",
             "آخری commits", "کمیٹس دکھاؤ", "کمیٹس پڑھو",

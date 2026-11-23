@@ -61,5 +61,45 @@ class NaturalIntentRouterTests(unittest.TestCase):
         self.assertEqual(self.router.route("hello Laiba"), "chat")
 
 
+    def test_all_remaining_router_intents(self):
+        cases = {
+            "find bugs in this code": "bug_analysis",
+            "export zip": "zip_export",
+            "show me a cube": "3d_status",
+            "list files": "file_list",
+            "open youtube": "open_link",
+            "run workflow android.yml": "workflow_dispatch",
+            "approve workflow android.yml": "workflow_approve",
+            "check for updates": "update_check",
+            "check updates": "update_check",
+        }
+        for phrase, expected in cases.items():
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.router.route(phrase), expected)
+
+    def test_urdu_and_mixed_language_routes(self):
+        cases = {
+            "بگز تلاش کرو": "bug_analysis",
+            "اپڈیٹس چیک": "update_check",
+            "فائل کھولو": "github_file_read",
+            "زپ بناؤ": "zip_export",
+            "یوٹیوب کھولو": "open_link",
+            "بلڈ اسٹیٹس": "build_status",
+        }
+        for phrase, expected in cases.items():
+            with self.subTest(phrase=phrase):
+                self.assertEqual(self.router.route(phrase), expected)
+
+    def test_approval_requires_explicit_identifier(self):
+        self.assertEqual(self.router.route("approve workflow"), "chat")
+        self.assertEqual(self.router.route("run workflow"), "chat")
+        self.assertEqual(self.router.route("yes, do it"), "chat")
+
+    def test_empty_and_whitespace_input_are_safe(self):
+        self.assertEqual(self.router.route(""), "chat")
+        self.assertEqual(self.router.route("   "), "chat")
+        self.assertEqual(self.router.route(None), "chat")
+
+
 if __name__ == "__main__":
     unittest.main()
