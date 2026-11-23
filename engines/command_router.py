@@ -49,7 +49,8 @@ class CommandRouter:
 
         # Build and GitHub Actions status.
         if self._has(q, (
-            "build status", "check build", "build complete",
+            "build status", "check build", "check github build",
+            "github build status", "github actions build", "build complete",
             "build completed", "is build done", "build hua",
             "build ho gayi", "build ban gayi", "build ka status",
             "build ka haal", "apk status", "apk ready",

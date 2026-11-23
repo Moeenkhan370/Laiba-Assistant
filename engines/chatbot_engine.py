@@ -578,6 +578,14 @@ class ChatbotEngine:
 
     def _classify_natural_intent(self, text):
         """Classify intent using multilingual conversation context."""
+        value = " ".join(str(text or "").casefold().split())
+
+        if re.search(r"\b(?:read|open|show)\s+(?:the\s+)?(?:github\s+)?repository\s+file\b(?!s)", value):
+            return "github_file_read"
+
+        if re.search(r"\b(?:list|show)\s+(?:the\s+)?(?:github\s+)?repository\s+files\b", value):
+            return "github_file_list"
+
         allowed = {
             "chat", "development_propose", "bug_analysis",
             "update_check", "build_status", "github_commits",
