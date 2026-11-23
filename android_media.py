@@ -216,6 +216,7 @@ class AndroidMediaBridge:
             return
 
         if event == "done":
+            self.is_speaking = False
             self._tts_last_utterance_id = None
             self._tts_stop_requested = False
             self._tts_state("done")
@@ -227,6 +228,7 @@ class AndroidMediaBridge:
                 flush=True
             )
             self.pending_speech = None
+            self.is_speaking = False
             self._tts_last_utterance_id = None
             self._tts_stop_requested = False
             self._tts_state("error")
