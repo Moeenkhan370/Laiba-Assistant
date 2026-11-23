@@ -1,16 +1,16 @@
-"""Multilingual intent router for Laiba's supported engine actions."""
+"""Multilingual, conservative intent router for Laiba."""
 import re
 import unicodedata
 
 
 class CommandRouter:
-    """Normalize mixed Urdu, Roman Urdu and English commands."""
+    """Recognize common English, Urdu and Roman-Urdu action requests."""
 
     @staticmethod
     def _normalize(text):
         value = unicodedata.normalize("NFKC", str(text or "")).casefold()
         value = value.replace("’", "'").replace("۔", " ")
-        value = re.sub(r"[،,!?؛:()\[\]{}]+", " ", value)
+        value = re.sub(r"[،,!?؛:()\[\]{}\"“”]+", " ", value)
         return re.sub(r"\s+", " ", value).strip()
 
     @staticmethod
@@ -20,6 +20,15 @@ class CommandRouter:
     def route(self, text):
         q = self._normalize(text)
 
+        if "github actions" in q and any(x in q for x in ("status", "state", "haal")):
+            return "build_status"
+
+        if any(x in q for x in ("naya update", "new update")) and any(
+            x in q for x in ("aya", "aaya", "available", "hai", "ha", "check")
+        ):
+            return "update_check"
+
+        # Explicit approvals only. Never infer approval from a vague reply.
         if re.fullmatch(
             r"(?:approve|apply)\s+(?:(?:proposal|development)\s+)?"
             r"[0-9]{10,}-[0-9a-f]{8}", q
@@ -37,6 +46,60 @@ class CommandRouter:
             r"[a-zA-Z0-9_.-]+", q
         ):
             return "workflow_dispatch"
+
+        # Build and GitHub Actions status.
+        if self._has(q, (
+            "build status", "check build", "build complete",
+            "build completed", "is build done", "build hua",
+            "build ho gayi", "build ban gayi", "build ka status",
+            "build ka haal", "apk status", "apk ready",
+            "apk ban gai", "apk ban gayi", "apk tayar",
+            "apk complete", "workflow status", "workflow run",
+            "github action status", "github actions status",
+            "latest build", "meri build", "mera build",
+            "بلڈ اسٹیٹس", "بلڈ چیک", "بلڈ مکمل", "بلڈ ہو گئی",
+            "بلڈ بن گئی", "بلڈ کا حال", "اے پی کے اسٹیٹس",
+            "اے پی کے بن گئی", "اے پی کے تیار", "ورک فلو اسٹیٹس"
+        )):
+            return "build_status"
+
+        # Self-development requests create a reviewable proposal only.
+        if self._has(q, (
+            "self develop", "self-development", "self development",
+            "self update engine", "work on yourself",
+            "work on self update", "work on the engine",
+            "improve yourself", "improve your code",
+            "make yourself better", "develop yourself",
+            "upgrade your engine", "improve this engine",
+            "fix your code", "add a feature", "create a feature",
+            "implement a feature", "change your code",
+            "laiba improve", "laiba update yourself",
+            "engine ko behtar", "engine ko improve",
+            "engine par kaam", "engine pe kaam",
+            "code ko behtar", "code improve",
+            "apna code", "apne code", "khud ko behtar",
+            "apne aap ko", "apni coding", "naya feature",
+            "feature add", "feature banao", "feature shamil",
+            "is engine ko", "iss engine ko",
+            "خود کو بہتر", "اپنا کوڈ بہتر", "اپنے کوڈ",
+            "اپنی کوڈنگ", "سیلف اپڈیٹ", "سیلف ڈیولپمنٹ",
+            "انجن پر کام", "انجن کو بہتر", "نیا فیچر",
+            "فیچر شامل", "کوڈ میں تبدیلی", "اپنے اندر بہتری"
+        )):
+            return "development_propose"
+
+        # Update check is read-only; it does not install anything.
+        if self._has(q, (
+            "check update", "check for update", "update check",
+            "any update", "is there an update", "new update",
+            "latest update", "latest version", "new version",
+            "update available", "app update", "apk update",
+            "update yourself", "اپ ڈیٹ چیک", "اپڈیٹ چیک",
+            "نیا اپ ڈیٹ", "نئی اپ ڈیٹ", "نیا ورژن",
+            "اپ ڈیٹ آیا", "اپڈیٹ آیا", "اپ ڈیٹ دستیاب",
+            "اپڈیٹ دستیاب", "ورژن چیک"
+        )):
+            return "update_check"
 
         if self._has(q, (
             "latest commits", "last commits", "recent commits",
@@ -62,31 +125,8 @@ class CommandRouter:
             return "github_file_read"
 
         if self._has(q, (
-            "build status", "check build", "apk status",
-            "workflow status", "بلڈ اسٹیٹس", "اے پی کے اسٹیٹس",
-            "بلڈ چیک کرو", "بلڈ کا حال"
-        )):
-            return "build_status"
-
-        if self._has(q, (
-            "self develop", "self-development", "develop yourself",
-            "improve yourself", "add feature", "create feature",
-            "implement feature", "fix your code", "improve your code",
-            "خود کو بہتر بناؤ", "اپنا کوڈ بہتر کرو",
-            "نیا فیچر بناؤ", "فیچر شامل کرو", "کوڈ میں تبدیلی",
-            "اپنے اندر بہتری لاؤ"
-        )):
-            return "development_propose"
-
-        if self._has(q, (
-            "check update", "update yourself", "check for update",
-            "اپ ڈیٹ", "اپڈیٹ", "نیا ورژن", "اپ ڈیٹ چیک کرو"
-        )):
-            return "update_check"
-
-        if self._has(q, (
             "export zip", "create zip", "whatsapp zip", "zip export",
-            "zip بنا", "زپ بنا"
+            "zip bana", "zip banao", "zip بنا", "زپ بنا"
         )):
             return "zip_export"
 
