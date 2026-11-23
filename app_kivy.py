@@ -1147,7 +1147,10 @@ class LaibaKivyApp(App):
             self.voice_processing = True
             self.voice_status.text = "Laiba is preparing her voice reply..."
             self.voice_orb.set_state("speaking")
-        self.media_bridge.speak(str(result))
+        if getattr(self, "voice_active", False):
+            self.media_bridge.speak_voice_reply(str(result))
+        else:
+            self.media_bridge.speak(str(result))
 
 
 

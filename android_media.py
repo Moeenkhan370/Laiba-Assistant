@@ -1,5 +1,7 @@
 from kivy.utils import platform
 import os
+import base64
+import wave
 from threading import Thread
 from kivy.clock import Clock
 from kivy.metrics import dp
@@ -90,14 +92,365 @@ class AndroidMediaBridge:
 
         self.native_tts.speak(text)
 
+    def speak_voice_reply(self, text):
+        """Use Gemini 2.5 Flash Preview TTS only for two-way voice replies."""
+        text = str(text or "").strip()
+        if not text:
+            return
+
+        self._gemini_tts_generation = getattr(
+            self, "_gemini_tts_generation", 0
+        ) + 1
+        generation = self._gemini_tts_generation
+
+        chatbot = getattr(self.app, "chatbot", None)
+        keys = []
+        if chatbot:
+            keys.extend(getattr(chatbot, "api_keys", []) or [])
+            keys.insert(0, getattr(chatbot, "api_key", ""))
+
+        keys = list(dict.fromkeys(
+            str(key).strip() for key in keys if str(key).strip()
+        ))
+
+        if not keys:
+            print("LAIBA_GEMINI_TTS_FALLBACK: No API key", flush=True)
+            self.speak(text)
+            return
+
+        def worker():
+            import requests
+            import re
+
+            model = "gemini-2.5-flash-preview-tts"
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/"
+                "models/" + model + ":generateContent"
+            )
+            payload = {
+                "contents": [{
+                    "parts": [{"text": text}]
+                }],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": "Kore"
+                            }
+                        }
+                    }
+                }
+            }
+
+            last_error = "No configured API key worked."
+
+            for key in keys:
+                try:
+                    response = requests.post(
+                        url,
+                        params={"key": key},
+                        json=payload,
+                        timeout=60
+                    )
+
+                    if not response.ok:
+                        last_error = "HTTP {}".format(response.status_code)
+                        print(
+                            "LAIBA_GEMINI_TTS_MODEL_ERROR:",
+                            last_error, flush=True
+                        )
+                        response.close()
+                        continue
+
+                    data = response.json()
+                    response.close()
+
+                    candidates = data.get("candidates") or []
+                    parts = (
+                        candidates[0].get("content", {}).get("parts", [])
+                        if candidates else []
+                    )
+                    inline = next(
+                        (
+                            part.get("inlineData") or part.get("inline_data")
+                            for part in parts
+                            if part.get("inlineData") or part.get("inline_data")
+                        ),
+                        None
+                    )
+
+                    if not inline or not inline.get("data"):
+                        last_error = "Gemini returned no audio data."
+                        continue
+
+                    pcm = base64.b64decode(inline["data"], validate=True)
+                    mime = str(
+                        inline.get("mimeType") or
+                        inline.get("mime_type") or
+                        "audio/pcm;rate=24000"
+                    )
+                    rate_match = re.search(r"rate=(\d+)", mime)
+                    sample_rate = int(rate_match.group(1)) if rate_match else 24000
+
+                    if not pcm:
+                        last_error = "Gemini returned empty audio."
+                        continue
+
+                    os.makedirs(self.app.user_data_dir, exist_ok=True)
+                    path = os.path.join(
+                        self.app.user_data_dir,
+                        "laiba_gemini_tts_{}.wav".format(
+                            __import__("time").time_ns()
+                        )
+                    )
+
+                    with wave.open(path, "wb") as output:
+                        output.setnchannels(1)
+                        output.setsampwidth(2)
+                        output.setframerate(sample_rate)
+                        output.writeframes(pcm)
+
+                    print(
+                        "LAIBA_GEMINI_TTS_GENERATION: PASS",
+                        "model=", model,
+                        "bytes=", len(pcm),
+                        "rate=", sample_rate,
+                        flush=True
+                    )
+                    Clock.schedule_once(
+                        lambda dt: self._play_gemini_tts_audio(
+                            path, text, generation
+                        ), 0
+                    )
+                    return
+
+                except Exception as exc:
+                    last_error = type(exc).__name__ + ": " + str(exc)[:180]
+                    print(
+                        "LAIBA_GEMINI_TTS_REQUEST_ERROR:",
+                        last_error, flush=True
+                    )
+
+            print(
+                "LAIBA_GEMINI_TTS_FALLBACK_TO_ANDROID_NATIVE:",
+                last_error, flush=True
+            )
+            if self.diagnostics:
+                self.diagnostics.record(
+                    "tts", "Gemini TTS unavailable; Android Native TTS fallback",
+                    last_error, severity="WARNING"
+                )
+            Clock.schedule_once(
+                lambda dt: self._fallback_voice_reply(
+                    text, generation
+                ), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _fallback_voice_reply(self, text, generation):
+        if generation != getattr(self, "_gemini_tts_generation", 0):
+            return
+        self.speak(text)
+
+    def _play_gemini_tts_audio(self, path, text, generation):
+        if generation != getattr(self, "_gemini_tts_generation", 0):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return
+
+        player = None
+
+        try:
+            from jnius import autoclass, PythonJavaClass, java_method
+
+            MediaPlayer = autoclass("android.media.MediaPlayer")
+            bridge = self
+
+            class CompletionListener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/media/MediaPlayer$OnCompletionListener"
+                ]
+                __javacontext__ = "app"
+
+                def __init__(self):
+                    super().__init__()
+
+                @java_method("(Landroid/media/MediaPlayer;)V")
+                def onCompletion(self, mp):
+                    Clock.schedule_once(
+                        lambda dt: bridge._finish_gemini_tts(
+                            path, generation, mp
+                        ), 0
+                    )
+
+            class ErrorListener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/media/MediaPlayer$OnErrorListener"
+                ]
+                __javacontext__ = "app"
+
+                def __init__(self):
+                    super().__init__()
+
+                @java_method("(Landroid/media/MediaPlayer;II)Z")
+                def onError(self, mp, what, extra):
+                    print(
+                        "LAIBA_GEMINI_TTS_MEDIA_ERROR:",
+                        what, extra, flush=True
+                    )
+                    Clock.schedule_once(
+                        lambda dt: bridge._gemini_tts_playback_failed(
+                            path, text, generation, mp
+                        ), 0
+                    )
+                    return True
+
+            player = MediaPlayer()
+            player.setAudioStreamType(3)
+            player.setDataSource(path)
+
+            self._gemini_tts_completion_listener = CompletionListener()
+            self._gemini_tts_error_listener = ErrorListener()
+
+            player.setOnCompletionListener(
+                self._gemini_tts_completion_listener
+            )
+            player.setOnErrorListener(
+                self._gemini_tts_error_listener
+            )
+
+            player.prepare()
+
+            if generation != getattr(
+                self, "_gemini_tts_generation", 0
+            ):
+                player.release()
+                return
+
+            self._gemini_tts_player = player
+            self.is_speaking = True
+            self._tts_state("speaking")
+            player.start()
+
+            print(
+                "LAIBA_GEMINI_TTS_PLAYBACK_STARTED",
+                "backend=Android MediaPlayer",
+                flush=True
+            )
+
+        except Exception as exc:
+            print(
+                "LAIBA_GEMINI_TTS_PLAYBACK_ERROR:",
+                repr(exc), flush=True
+            )
+            if player:
+                try:
+                    player.release()
+                except Exception:
+                    pass
+
+            self._gemini_tts_player = None
+            self._gemini_tts_completion_listener = None
+            self._gemini_tts_error_listener = None
+
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+            self._fallback_voice_reply(text, generation)
+
+    def _finish_gemini_tts(self, path, generation, player):
+        if generation != getattr(self, "_gemini_tts_generation", 0):
+            return
+
+        if player is not getattr(self, "_gemini_tts_player", None):
+            return
+
+        self._gemini_tts_player = None
+
+        try:
+            player.release()
+        except Exception:
+            pass
+
+        self._gemini_tts_completion_listener = None
+        self._gemini_tts_error_listener = None
+
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+        self.is_speaking = False
+        print("LAIBA_GEMINI_TTS_PLAYBACK_DONE", flush=True)
+        self._tts_state("done")
+
+    def _gemini_tts_playback_failed(
+        self, path, text, generation, player
+    ):
+        if generation != getattr(self, "_gemini_tts_generation", 0):
+            return
+
+        if player is not getattr(self, "_gemini_tts_player", None):
+            return
+
+        self._gemini_tts_player = None
+
+        try:
+            player.release()
+        except Exception:
+            pass
+
+        self._gemini_tts_completion_listener = None
+        self._gemini_tts_error_listener = None
+
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+        print(
+            "LAIBA_GEMINI_TTS_FALLBACK_TO_ANDROID_NATIVE",
+            flush=True
+        )
+        self._fallback_voice_reply(text, generation)
+
     def stop_speaking(self):
+        self._gemini_tts_generation = getattr(
+            self, "_gemini_tts_generation", 0
+        ) + 1
+
+        player = getattr(self, "_gemini_tts_player", None)
+        self._gemini_tts_player = None
+
+        if player:
+            try:
+                player.stop()
+            except Exception:
+                pass
+            try:
+                player.release()
+            except Exception:
+                pass
+
+        self._gemini_tts_completion_listener = None
+        self._gemini_tts_error_listener = None
+
         try:
             if self.native_tts:
                 self.native_tts.stop()
             else:
                 self._tts_state("stopped")
         except Exception as exc:
-            print("LAIBA_PY_TTS_STOP_ERROR:", repr(exc), flush=True)
+            print(
+                "LAIBA_PY_TTS_STOP_ERROR:",
+                repr(exc), flush=True
+            )
             self._tts_state("error")
 
     def _tts_state(self, state):
