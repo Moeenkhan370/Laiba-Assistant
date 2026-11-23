@@ -126,6 +126,12 @@ class SelfUpdateEngine:
     def download_apk(self, url, expected_sha256, destination,
                      max_bytes=512 * 1024 * 1024):
         url = self._https_url(url, "APK URL")
+        if (
+            isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or max_bytes <= 0
+        ):
+            raise ValueError("APK maximum size must be a positive integer.")
         if not isinstance(expected_sha256, str) or not re.fullmatch(
             r"[0-9a-fA-F]{64}", expected_sha256
         ):
@@ -153,8 +159,9 @@ class SelfUpdateEngine:
                 urllib.request.HTTPSHandler(context=self._ssl_context())
             )
             with opener.open(request, timeout=self.timeout) as response:
-                if urlparse(response.geturl()).scheme.lower() != "https":
-                    raise ValueError("Insecure final download URL.")
+                self._https_url(
+                    response.geturl(), "Final APK download URL"
+                )
                 with tempfile.NamedTemporaryFile(
                     mode="wb", dir=os.path.dirname(destination),
                     prefix=".laiba-update-", suffix=".part", delete=False
@@ -184,8 +191,10 @@ class SelfUpdateEngine:
 
     @staticmethod
     def verify_file(path, expected_sha256):
-        if not expected_sha256:
-            return False, "Manifest has no SHA-256 digest."
+        if not isinstance(expected_sha256, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", expected_sha256
+        ):
+            return False, "A valid 64-character SHA-256 digest is required."
         digest = hashlib.sha256()
         with open(path, "rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -196,6 +205,8 @@ class SelfUpdateEngine:
     def save_update_state(self, state):
         if not self.state_path:
             raise ValueError("Update state path is not configured.")
+        if not isinstance(state, dict):
+            raise ValueError("Update state must be a JSON object.")
         directory = os.path.dirname(os.path.abspath(self.state_path))
         os.makedirs(directory, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".update-state-", dir=directory)
@@ -218,8 +229,11 @@ class SelfUpdateEngine:
             if not isinstance(state, dict):
                 raise ValueError("Invalid update state.")
             return state
-        except (OSError, ValueError, json.JSONDecodeError):
-            return {"status": "failed", "reason": "Update state file is invalid."}
+        except (OSError, ValueError, UnicodeError, TypeError):
+            return {
+                "status": "failed",
+                "reason": "Update state file is invalid or unreadable."
+            }
 
     def mark_update_pending(self, target_version, apk_path, sha256):
         if not target_version or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", str(target_version)):
