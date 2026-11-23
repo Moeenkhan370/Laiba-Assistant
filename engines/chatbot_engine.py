@@ -571,25 +571,25 @@ class ChatbotEngine:
                         lines.append("{} | {}".format(
                             str(item.get("sha", ""))[:12], message_text[:160]
                         ))
-                    return "\\n".join(lines)
+                    return "\n".join(lines)
 
                 if intent == "github_file_list":
                     paths = client.list_repository_files()
                     if not paths:
                         return "No supported text files found in the repository."
                     shown = paths[:80]
-                    return "Repository files ({} total):\\n{}".format(
-                        len(paths), "\\n".join(shown)
+                    return "Repository files ({} total):\n{}".format(
+                        len(paths), "\n".join(shown)
                     )
 
                 match = re.search(
-                    r"(?:file|فائل)\\s+([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)",
+                    r"(?:file|فائل)\s+([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)",
                     text, re.I
                 )
                 if not match:
                     return "File path required. Example: read file engines/chatbot_engine.py"
                 content = client.read_file(match.group(1))
-                return "GitHub file: {}\\n\\n{}".format(
+                return "GitHub file: {}\n\n{}".format(
                     match.group(1), content[:12000]
                 )
             except Exception as exc:
@@ -634,10 +634,10 @@ class ChatbotEngine:
             lines = ["تبدیلی کی تجویز تیار ہے: " + result.get("summary", ""),
                      "Proposal ID: " + result["proposal_id"]]
             for change in result.get("changes", []):
-                lines.append("\\nFile: " + change["path"] + "\\n" + change["preview"][:1000])
-            lines.append("\\nجائزے کے بعد لاگو کرنے کے لیے لکھیں: approve proposal " + result["proposal_id"])
+                lines.append("\nFile: " + change["path"] + "\n" + change["preview"][:1000])
+            lines.append("\nجائزے کے بعد لاگو کرنے کے لیے لکھیں: approve proposal " + result["proposal_id"])
             lines.append("ابھی کسی فائل میں تبدیلی نہیں کی گئی۔")
-            return "\\n".join(lines)
+            return "\n".join(lines)
         if intent == "update_check":
             info = self.self_updater.check_for_updates()
             return "Update check: {}\nCurrent: {}\nLatest: {}\n{}".format(info["status"], info["current_version"], info.get("latest_version") or "unknown", info["changelog"])
