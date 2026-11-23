@@ -667,12 +667,13 @@ class ChatbotEngine:
         except Exception:
             return "chat"
 
-    def process_message(self, user_text, image_path=None):
+    def process_message(self, user_text, image_path=None, voice_mode=False):
         text = str(user_text or "").strip()
         if not text and not image_path: return "Please type or say something."
         self.interrupt_flag = False
         intent = self.router.route(text)
-        if (intent == "chat" and not image_path and self.api_keys
+        if (not voice_mode and intent == "chat" and not image_path
+                and self.api_keys
                 and self._should_classify_intent(text)):
             intent = self._classify_natural_intent(text)
         if intent == "bug_analysis":
@@ -841,4 +842,16 @@ class ChatbotEngine:
             return "Opening apps and websites requires the Android intent bridge; that integration is not yet enabled in this build."
         build = self.handle_buildozer_commands(text)
         if build: return build
+
+        if voice_mode and not image_path:
+            spoken_prompt = (
+                text +
+                "\n\nFor this live spoken conversation, answer naturally "
+                "and concisely in one to three sentences unless more detail "
+                "is requested."
+            )
+            return self._gemini(
+                spoken_prompt, max_output_tokens=320
+            )
+
         return self._gemini(text or "Please analyze this image.", image_path)

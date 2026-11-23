@@ -1033,7 +1033,7 @@ class LaibaKivyApp(App):
 
         def worker():
             try:
-                result = self.chatbot.process_message(text)
+                result = self.chatbot.process_message(text, voice_mode=True)
             except Exception as exc:
                 self.diagnostics.record_exception(
                     "chat", "Message processing failed", exc
@@ -1118,16 +1118,27 @@ class LaibaKivyApp(App):
                 self.voice_status.text = "Listening..."
                 self.voice_orb.set_state("listening")
                 self.voice_hint.text = "I'm listening. Speak now."
-                Clock.schedule_once(
-                    lambda dt: self.media_bridge._restart_listening()
+                retry = {"count": 0}
+
+                def resume_listening(dt):
                     if (
-                        self.voice_active
-                        and not self.voice_muted
-                        and not self.voice_processing
-                        and not self.media_bridge.is_speaking
-                    ) else None,
-                    0.5
-                )
+                        not self.voice_active
+                        or self.voice_muted
+                        or self.voice_processing
+                        or self.media_bridge.is_speaking
+                    ):
+                        return
+
+                    self.media_bridge._restart_listening()
+                    retry["count"] += 1
+
+                    if (
+                        not self.media_bridge.recognition_active
+                        and retry["count"] < 3
+                    ):
+                        Clock.schedule_once(resume_listening, 1.0)
+
+                Clock.schedule_once(resume_listening, 0.8)
 
         elif state == "error":
             self.voice_processing = False
