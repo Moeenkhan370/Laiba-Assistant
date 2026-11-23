@@ -6,7 +6,7 @@ import re
 import zipfile
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import requests
 from config import CURRENT_CONFIG, save_config
 from engines.github_client import GitHubClient
@@ -662,6 +662,45 @@ class ChatbotEngine:
         except Exception:
             return "chat"
 
+    @staticmethod
+    def _external_url_for_command(text):
+        raw = str(text or "").strip()
+        q = CommandRouter._normalize(raw)
+
+        for word, url in (
+            ("youtube", "https://www.youtube.com"),
+            ("google", "https://www.google.com"),
+            ("browser", "https://www.google.com"),
+        ):
+            if word in q:
+                return url
+
+        match = re.search(r"https?://[^\\s<>\\\"']+", raw, re.I)
+        candidate = match.group(0) if match else None
+        if not candidate:
+            match = re.search(
+                r"\\b(?:open|visit|go to)\\s+"
+                r"([a-z0-9.-]+\\.[a-z]{2,}(?:/[^\\s]*)?)",
+                raw, re.I
+            )
+            candidate = match.group(1) if match else None
+        if not candidate:
+            return None
+
+        candidate = candidate.rstrip(".,!?;:)]}")
+        if "://" not in candidate:
+            candidate = "https://" + candidate
+        try:
+            parsed = urlsplit(candidate)
+            if (parsed.scheme.lower() not in ("http", "https")
+                    or not parsed.hostname
+                    or parsed.username or parsed.password):
+                return None
+            parsed.port
+        except ValueError:
+            return None
+        return candidate
+
     def process_message(self, user_text, image_path=None, voice_mode=False):
         text = str(user_text or "").strip()
         if not text and not image_path: return "Please type or say something."
@@ -834,7 +873,16 @@ class ChatbotEngine:
         if intent == "file_list":
             return "Project files: {}".format(", ".join(self.file_modifier.list_dir(".")))
         if intent == "open_link":
-            return "Opening apps and websites requires the Android intent bridge; that integration is not yet enabled in this build."
+            url = self._external_url_for_command(text)
+            if not url:
+                return "Please specify a valid website or http/https URL."
+            opener = getattr(self, "external_opener", None)
+            if not callable(opener):
+                return "External app opening is unavailable."
+            try:
+                return ("Opening: " if opener(url) else "Could not open: ") + url
+            except Exception as exc:
+                return "Could not open website: " + type(exc).__name__
         if voice_mode and not image_path:
             spoken_prompt = (
                 text +

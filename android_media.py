@@ -803,6 +803,40 @@ class AndroidMediaBridge:
 
         Thread(target=worker, daemon=True).start()
 
+    def open_external_url(self, url):
+        from urllib.parse import urlsplit
+        try:
+            parsed = urlsplit(str(url or "").strip())
+            if (parsed.scheme.lower() not in ("http", "https")
+                    or not parsed.hostname
+                    or parsed.username or parsed.password):
+                return False
+            parsed.port
+        except (TypeError, ValueError):
+            return False
+
+        safe_url = str(url).strip()
+        if platform != "android":
+            return False
+
+        def launch():
+            try:
+                from jnius import autoclass
+                Activity = autoclass("org.kivy.android.PythonActivity")
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                intent = Intent(Intent.ACTION_VIEW, Uri.parse(safe_url))
+                Activity.mActivity.startActivity(intent)
+            except Exception as exc:
+                self.message("Could not open website: " + str(exc)[:160])
+
+        try:
+            self._run_on_android_ui_thread(launch)
+            return True
+        except Exception as exc:
+            print("LAIBA_OPEN_URL_ERROR:", repr(exc), flush=True)
+            return False
+
     def _bind_activity(self):
         if self.activity_bound:
             return

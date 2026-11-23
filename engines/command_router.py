@@ -184,9 +184,17 @@ class CommandRouter:
         # External app opening.
         if self._has(q, (
             "open youtube", "open browser", "open google",
+            "open website", "open url", "open link",
+            "visit website", "go to website",
             "یوٹیوب کھولو", "براؤزر کھولو",
-            "گوگل کھولو"
-        )):
+            "گوگل کھولو", "لنک کھولو"
+        )) or re.search(r"https?://\\S+", str(text or ""), re.I):
+            return "open_link"
+
+        if re.search(
+            r"\\b(?:open|visit|go to)\\s+[a-z0-9.-]+\\.[a-z]{2,}",
+            q, re.I
+        ):
             return "open_link"
 
         # Natural-language update checks (including plural wording).
