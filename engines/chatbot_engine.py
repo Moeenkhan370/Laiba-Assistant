@@ -596,9 +596,31 @@ class ChatbotEngine:
                 return "GitHub read failed: " + type(exc).__name__ + ": " + str(exc)[:180]
 
         if intent == "workflow_dispatch":
-            match = re.fullmatch(r"run workflow\s+([a-zA-Z0-9_.-]+)", text.strip(), re.I)
+            match = re.fullmatch(
+                r"(?:run|start|dispatch)\s+workflow\s+([a-zA-Z0-9_.-]+)",
+                text.strip(), re.I
+            )
             if not match:
                 return "Workflow command is invalid."
+            self._pending_workflow_dispatch = match.group(1)
+            return (
+                "Workflow approval required. No workflow was started. "
+                "Review the workflow name and confirm with: approve workflow "
+                + match.group(1)
+            )
+
+        if intent == "workflow_approve":
+            match = re.fullmatch(
+                r"(?:approve|confirm)\s+(?:workflow|run)\s+"
+                r"([a-zA-Z0-9_.-]+)", text.strip(), re.I
+            )
+            if not match:
+                return "Workflow approval command is invalid."
+            requested = match.group(1)
+            pending = getattr(self, "_pending_workflow_dispatch", None)
+            if not pending or requested != pending:
+                return "No matching pending workflow approval exists."
+            self._pending_workflow_dispatch = None
             token = str(CURRENT_CONFIG.get("GITHUB_TOKEN", "")).strip()
             if not token:
                 return "GitHub token is not configured."
@@ -608,8 +630,8 @@ class ChatbotEngine:
                     CURRENT_CONFIG.get("GITHUB_REPOSITORY", ""),
                     CURRENT_CONFIG.get("GITHUB_BRANCH", "laiba-self-development")
                 )
-                result = client.dispatch_workflow(match.group(1), approved=True)
-                return "Workflow dispatch accepted: " + str(result)
+                result = client.dispatch_workflow(requested, approved=True)
+                return "Approved workflow dispatch result: " + str(result)
             except Exception as exc:
                 return "Workflow dispatch failed: " + type(exc).__name__
 

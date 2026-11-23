@@ -1,8 +1,6 @@
 """Safe Gemini-assisted self-development engine for Laiba."""
 import ast
 import hashlib
-import subprocess
-import sys
 import json
 import os
 import re
@@ -257,14 +255,7 @@ class DevelopmentEngine:
                     if os.path.exists(temp_name):
                         os.unlink(temp_name)
 
-            tests_dir = self.root / "tests"
-            if tests_dir.is_dir():
-                test = subprocess.run(
-                    [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-                    cwd=str(self.root), capture_output=True, text=True, timeout=180
-                )
-                if test.returncode:
-                    raise RuntimeError("Tests failed: " + (test.stdout + test.stderr)[-1200:])
+            # Automated tests run in GitHub Actions, not on the user's Android device.
             remote_commit = None
             if self.github_client is not None:
                 staged_changes = [

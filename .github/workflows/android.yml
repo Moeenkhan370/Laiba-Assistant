@@ -6,12 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Laiba Project
@@ -45,8 +47,8 @@ jobs:
           echo "APT installation failed after 5 attempts."
           exit 1
 
-      - name: Run self-update tests
-        run: python -m unittest tests.test_self_update -v
+      - name: Run complete unit and integration test suite
+        run: python -m unittest discover -s tests -v
 
       - name: Install Buildozer
         run: |
