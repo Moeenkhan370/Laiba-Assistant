@@ -605,7 +605,7 @@ class AndroidMediaBridge:
                             names.get(error, "UNKNOWN")
                         )
 
-                    if error == 8:
+                    if error in (5, 8):
                         def recover(dt):
                             def reset_recognizer():
                                 try:
