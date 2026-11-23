@@ -4,6 +4,7 @@ from threading import Thread
 from kivy.clock import Clock
 from kivy.metrics import dp
 from kivy.uix.label import Label
+from engines.android_tts import AndroidNativeTTS
 
 
 class _TTSInitListener:
@@ -67,255 +68,32 @@ class AndroidMediaBridge:
 
     def init_native_tts(self):
         try:
-            from jnius import autoclass, PythonJavaClass, java_method
-
-            bridge = self
-
-            class ProgressCallback(PythonJavaClass):
-                __javainterfaces__ = [
-                    "com/moeen/laibaassistant/LaibaTtsListener$Callback"
-                ]
-                __javacontext__ = "app"
-
-                def __init__(self):
-                    super().__init__()
-
-                @java_method("(Ljava/lang/String;)V")
-                def onStart(self, utterance_id):
-                    bridge._queue_tts_event("start", utterance_id)
-
-                @java_method("(Ljava/lang/String;)V")
-                def onDone(self, utterance_id):
-                    bridge._queue_tts_event("done", utterance_id)
-
-                @java_method("(Ljava/lang/String;I)V")
-                def onError(self, utterance_id, error_code):
-                    bridge._queue_tts_event(
-                        "error", utterance_id, error_code
-                    )
-
-                @java_method("(Ljava/lang/String;Z)V")
-                def onStop(self, utterance_id, interrupted):
-                    bridge._queue_tts_event(
-                        "stop", utterance_id, 0, bool(interrupted)
-                    )
-
-            class InitListener(PythonJavaClass):
-                __javainterfaces__ = [
-                    "android/speech/tts/TextToSpeech$OnInitListener"
-                ]
-                __javacontext__ = "app"
-
-                def __init__(self):
-                    super().__init__()
-
-                @java_method("(I)V")
-                def onInit(self, status):
-                    try:
-                        TTS = autoclass(
-                            "android.speech.tts.TextToSpeech"
-                        )
-
-                        if status != TTS.SUCCESS:
-                            raise RuntimeError(
-                                "Android TTS initialization failed: "
-                                + str(status)
-                            )
-
-                        Locale = autoclass("java.util.Locale")
-                        language_result = bridge.tts.setLanguage(
-                            Locale("ur", "PK")
-                        )
-
-                        if language_result < TTS.LANG_AVAILABLE:
-                            print(
-                                "LAIBA_TTS: Urdu voice unavailable; "
-                                "using device language",
-                                flush=True
-                            )
-                            language_result = bridge.tts.setLanguage(
-                                Locale.getDefault()
-                            )
-
-                        if language_result < TTS.LANG_AVAILABLE:
-                            raise RuntimeError(
-                                "No supported Android TTS language"
-                            )
-
-                        Helper = autoclass(
-                            "com.moeen.laibaassistant.LaibaTtsListener"
-                        )
-                        bridge.tts_progress_listener = ProgressCallback()
-
-                        if not Helper.attach(
-                            bridge.tts,
-                            bridge.tts_progress_listener
-                        ):
-                            raise RuntimeError(
-                                "TTS completion listener could not attach"
-                            )
-
-                        bridge.tts_ready = True
-                        bridge.tts_init_failed = False
-                        print("LAIBA_NATIVE_TTS_READY", flush=True)
-
-                        pending = bridge.pending_speech
-                        bridge.pending_speech = None
-
-                        if pending:
-                            Clock.schedule_once(
-                                lambda dt: bridge.speak(pending), 0
-                            )
-
-                    except Exception as exc:
-                        bridge.tts_ready = False
-                        bridge.tts_init_failed = True
-                        bridge.pending_speech = None
-                        print(
-                            "LAIBA_NATIVE_TTS_INIT_ERROR:",
-                            repr(exc),
-                            flush=True
-                        )
-                        bridge._tts_state("error")
-
-            Activity = autoclass("org.kivy.android.PythonActivity")
-            self.tts_listener = InitListener()
-            self.tts = autoclass(
-                "android.speech.tts.TextToSpeech"
-            )(Activity.mActivity, self.tts_listener)
-
-            print("LAIBA_NATIVE_TTS_INITIALIZATION_REQUESTED", flush=True)
-
+            self.native_tts = AndroidNativeTTS(self._tts_state)
         except Exception as exc:
-            self.tts_ready = False
-            self.tts_init_failed = True
-            self.pending_speech = None
-            print("LAIBA_NATIVE_TTS_ERROR:", repr(exc), flush=True)
+            self.native_tts = None
+            print("LAIBA_PY_TTS_BRIDGE_ERROR:", repr(exc), flush=True)
             self._tts_state("error")
-
-    def _queue_tts_event(
-        self, event, utterance_id="", error_code=0, interrupted=False
-    ):
-        try:
-            Clock.schedule_once(
-                lambda dt: self._handle_tts_event(
-                    event,
-                    str(utterance_id or ""),
-                    int(error_code),
-                    bool(interrupted)
-                ),
-                0
-            )
-        except Exception as exc:
-            print("LAIBA_TTS_CALLBACK_ERROR:", repr(exc), flush=True)
-
-    def _handle_tts_event(
-        self, event, utterance_id, error_code=0, interrupted=False
-    ):
-        if utterance_id != self._tts_last_utterance_id:
-            return
-
-        if event == "done":
-            self.is_speaking = False
-            self._tts_last_utterance_id = None
-            self._tts_stop_requested = False
-            self._tts_state("done")
-
-        elif event == "error":
-            print(
-                "LAIBA_TTS_PLAYBACK_ERROR:",
-                error_code,
-                flush=True
-            )
-            self.pending_speech = None
-            self.is_speaking = False
-            self._tts_last_utterance_id = None
-            self._tts_stop_requested = False
-            self._tts_state("error")
-
-        elif event == "stop":
-            self._tts_last_utterance_id = None
-            if not self._tts_stop_requested and interrupted:
-                self._tts_state("error")
-            self._tts_stop_requested = False
 
     def speak(self, text):
         text = str(text or "").strip()
         if not text:
             return
 
-        if not self.tts or not self.tts_ready:
-            if self.tts_init_failed:
-                self.pending_speech = None
-                self._tts_state("error")
-            else:
-                self.pending_speech = text
-                print("LAIBA_TTS_WAITING_FOR_INITIALIZATION", flush=True)
+        if not self.native_tts:
+            self._tts_state("error")
             return
 
-        try:
-            TTS = __import__(
-                "jnius", fromlist=["autoclass"]
-            ).autoclass("android.speech.tts.TextToSpeech")
-
-            chunks = self._split_tts_text(text)
-            if not chunks:
-                return
-
-            self._tts_stop_requested = False
-            self._tts_last_utterance_id = (
-                "laiba_reply_" + str(len(chunks) - 1)
-            )
-
-            self.is_speaking = True
-            self._tts_state("speaking")
-
-            for index, chunk in enumerate(chunks):
-                utterance_id = "laiba_reply_" + str(index)
-                queue_mode = (
-                    TTS.QUEUE_FLUSH if index == 0 else TTS.QUEUE_ADD
-                )
-
-                result = self.tts.speak(
-                    chunk, queue_mode, None, utterance_id
-                )
-
-                if result == TTS.ERROR:
-                    raise RuntimeError(
-                        "Android TextToSpeech returned ERROR"
-                    )
-
-            print(
-                "LAIBA_TTS_PLAYING:",
-                len(chunks),
-                "chunk(s)",
-                flush=True
-            )
-
-        except Exception as exc:
-            print("LAIBA_TTS_SPEAK_ERROR:", repr(exc), flush=True)
-            self.pending_speech = None
-            self._tts_last_utterance_id = None
-            self._tts_stop_requested = False
-            try:
-                self.tts.stop()
-            except Exception:
-                pass
-            self._tts_state("error")
+        self.native_tts.speak(text)
 
     def stop_speaking(self):
-        self.pending_speech = None
-        self._tts_stop_requested = True
-        self._tts_last_utterance_id = None
-        self.is_speaking = False
-
         try:
-            if self.tts:
-                self.tts.stop()
+            if self.native_tts:
+                self.native_tts.stop()
+            else:
+                self._tts_state("stopped")
         except Exception as exc:
-            print("LAIBA_TTS_STOP_ERROR:", repr(exc), flush=True)
-
-        self._tts_state("stopped")
+            print("LAIBA_PY_TTS_STOP_ERROR:", repr(exc), flush=True)
+            self._tts_state("error")
 
     def _tts_state(self, state):
         self.is_speaking = (state == "speaking")
@@ -372,16 +150,12 @@ class AndroidMediaBridge:
             print("LAIBA_RECOGNIZER_SHUTDOWN_QUEUE:", repr(exc), flush=True)
 
         try:
-            if self.tts:
-                self.tts.stop()
-                self.tts.shutdown()
+            if self.native_tts:
+                self.native_tts.shutdown()
         except Exception as exc:
-            print("LAIBA_TTS_SHUTDOWN:", repr(exc), flush=True)
+            print("LAIBA_PY_TTS_SHUTDOWN:", repr(exc), flush=True)
         finally:
-            self.tts = None
-            self.tts_ready = False
-            self.tts_listener = None
-            self.tts_progress_listener = None
+            self.native_tts = None
 
     def message(self, text):
         Clock.schedule_once(
@@ -950,7 +724,7 @@ class AndroidMediaBridge:
             and not getattr(app, "voice_muted", True)
             and not getattr(app, "voice_processing", False)
             and not self.is_speaking
-            and not getattr(self, "pending_speech", None)
+            and not (self.native_tts and self.native_tts.pending_speech)
             and not self.recognition_active
         ):
             self._start_speech()
