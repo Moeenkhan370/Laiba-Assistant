@@ -133,5 +133,21 @@ class SelfUpdateTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertIn("invalid", result["reason"].lower())
 
+
+    def test_rejects_https_url_with_embedded_credentials(self):
+        with self.assertRaises(ValueError):
+            SelfUpdateEngine._https_url(
+                "https://user:password@example.com/update.json",
+                "Manifest URL"
+            )
+
+    def test_accepts_normal_https_url(self):
+        self.assertEqual(
+            SelfUpdateEngine._https_url(
+                "https://example.com/update.json", "Manifest URL"
+            ),
+            "https://example.com/update.json"
+        )
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ import os
 # Default Pure Black Theme and System Configuration
 DEFAULT_CONFIG = {
     "APP_NAME": "Laiba Assistant",
-    "VERSION": "1.0.3",
+    "VERSION": "1.0.4",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
     "GITHUB_TOKEN": "",
     "GITHUB_REPOSITORY": "Moeenkhan370/Laiba-Assistant",

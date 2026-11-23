@@ -32,8 +32,13 @@ class SelfUpdateEngine:
         if not isinstance(value, str) or not value.strip():
             raise ValueError("{} must be a non-empty HTTPS URL.".format(field_name))
         parsed = urlparse(value.strip())
-        if parsed.scheme.lower() != "https" or not parsed.netloc:
-            raise ValueError("{} must use HTTPS.".format(field_name))
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("{} must use a valid HTTPS URL without embedded credentials.".format(field_name))
         return value.strip()
 
     @staticmethod

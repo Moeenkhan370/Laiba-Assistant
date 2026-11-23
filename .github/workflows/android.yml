@@ -75,7 +75,9 @@ jobs:
           test -n "$APK"
           HASH="$(sha256sum "$APK" | cut -d' ' -f1)"
           NAME="$(basename "$APK")"
-          printf '{"version":"1.0.3","changelog":"Laiba self-update release 1.0.3","apk_url":"https://github.com/Moeenkhan370/Laiba-Assistant/releases/download/laiba-development-latest/%s","sha256":"%s"}\n' "$NAME" "$HASH" > update_manifest.json
+          VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*//p' buildozer.spec | head -n1)"
+          test -n "$VERSION"
+          printf '{"version":"%s","changelog":"Laiba self-update release %s","apk_url":"https://github.com/Moeenkhan370/Laiba-Assistant/releases/download/laiba-development-latest/%s","sha256":"%s"}\n' "$VERSION" "$VERSION" "$NAME" "$HASH" > update_manifest.json
 
       - name: Upload Laiba APK
         uses: actions/upload-artifact@v4
