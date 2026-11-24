@@ -42,6 +42,7 @@ class AndroidMediaBridge:
         self.continuous_listening = False
         self.recognition_listener = None
         self.recognition_active = False
+        self.recognition_start_pending = False
         self._android_ui_runnables = []
         self.is_speaking = False
         self.tts_audio_manager = None
@@ -651,6 +652,7 @@ class AndroidMediaBridge:
         self.pending_speech = None
         self.is_speaking = False
         self.recognition_active = False
+        self.recognition_start_pending = False
 
         # Release Gemini MediaPlayer before deleting its audio file.
         player = getattr(self, "_gemini_tts_player", None)
@@ -1084,21 +1086,41 @@ class AndroidMediaBridge:
 
     def _start_speech(self):
         app = self.app
-        if getattr(app, "voice_active", False):
-            if (
-                getattr(app, "voice_muted", True)
-                or getattr(app, "voice_processing", False)
-                or self.is_speaking
-            ):
-                return
+
+        if getattr(app, "voice_active", False) and (
+            getattr(app, "voice_muted", True)
+            or getattr(app, "voice_processing", False)
+        ):
+            return
+
+        if self.recognition_active or self.recognition_start_pending:
+            return
+
+        self.recognition_start_pending = True
+
         try:
             self._run_on_android_ui_thread(
                 self._init_and_listen_ui_thread
             )
         except Exception as exc:
-            self._voice_state("error", "Android UI thread error: " + str(exc))
+            self.recognition_start_pending = False
+            self._voice_state(
+                "error", "Android UI thread error: " + str(exc)
+            )
 
     def _init_and_listen_ui_thread(self):
+        self.recognition_start_pending = False
+
+        app = self.app
+        if getattr(app, "voice_active", False) and (
+            getattr(app, "voice_muted", True)
+            or getattr(app, "voice_processing", False)
+        ):
+            return
+
+        if self.recognition_active:
+            return
+
         try:
             from jnius import autoclass, PythonJavaClass, java_method
 
@@ -1126,7 +1148,7 @@ class AndroidMediaBridge:
                         "hearing", "I can hear you. Processing your speech..."
                     )
                     Clock.schedule_once(
-                        lambda dt: self.bridge.stop_speaking(), 0
+                        lambda dt: self.bridge._interrupt_voice_reply(), 0
                     )
 
                 @java_method("(F)V")
@@ -1145,6 +1167,7 @@ class AndroidMediaBridge:
                 def onError(self, error):
                     bridge = self.bridge
                     bridge.recognition_active = False
+                    bridge.recognition_start_pending = False
 
                     names = {
                         1: "NETWORK_TIMEOUT", 2: "NETWORK",
@@ -1207,6 +1230,7 @@ class AndroidMediaBridge:
                 @java_method("(Landroid/os/Bundle;)V")
                 def onResults(self, results):
                     self.bridge.recognition_active = False
+                    self.bridge.recognition_start_pending = False
                     try:
                         SpeechRecognizer = autoclass(ANDROID_SPEECH_RECOGNIZER_CLASS)
                         matches = results.getStringArrayList(
@@ -1301,6 +1325,7 @@ class AndroidMediaBridge:
 
     def stop_listening(self):
         self.recognition_active = False
+        self.recognition_start_pending = False
 
         def stop():
             if self.speech_recognizer:
@@ -1313,14 +1338,31 @@ class AndroidMediaBridge:
 
     def _restart_listening(self):
         app = self.app
+
         if (
             getattr(app, "voice_active", False)
             and not getattr(app, "voice_muted", True)
             and not getattr(app, "voice_processing", False)
-            and not self.is_speaking
             and not self.recognition_active
+            and not self.recognition_start_pending
         ):
             self._start_speech()
+
+    def _interrupt_voice_reply(self):
+        if not self.is_speaking:
+            return False
+
+        print(
+            "LAIBA_VOICE_BARGE_IN: stopping current reply",
+            flush=True
+        )
+
+        callback = getattr(self.app, "on_voice_barge_in", None)
+        if callable(callback):
+            Clock.schedule_once(lambda dt: callback(), 0)
+
+        self.stop_speaking()
+        return True
 
     def live_camera(self):
         self.message("Live camera stream mode is ready.")

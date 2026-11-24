@@ -938,15 +938,19 @@ class LaibaKivyApp(App):
         if self.voice_muted:
             self.voice_muted = False
             self.voice_mic_button.text = "MIC ON"
-            if self.voice_processing or self.media_bridge.is_speaking:
-                self.voice_status.text = "Laiba is finishing her reply..."
-                self.voice_orb.set_state(
-                    "speaking" if self.media_bridge.is_speaking else "ready"
-                )
-                self.voice_hint.text = "Listening will resume after the reply."
+            if self.voice_processing:
+                self.voice_status.text = "Laiba is preparing her reply..."
+                self.voice_orb.set_state("ready")
+                self.voice_hint.text = "Listening will resume when the reply starts."
             else:
-                self.voice_status.text = "Listening..."
-                self.voice_orb.set_state("listening")
+                self.voice_status.text = (
+                    "Laiba is speaking — you can interrupt."
+                    if self.media_bridge.is_speaking else "Listening..."
+                )
+                self.voice_orb.set_state(
+                    "speaking" if self.media_bridge.is_speaking else "listening"
+                )
+                self.voice_hint.text = "Speak anytime to interrupt Laiba."
                 self.media_bridge.microphone()
 
         elif self.media_bridge.is_speaking:
@@ -1080,9 +1084,14 @@ class LaibaKivyApp(App):
             self.voice_orb.set_state("ready")
 
         elif state == "ready":
-            self.voice_status.text = "Listening..."
-            self.voice_hint.text = "Microphone ready. Speak in Urdu or English."
-            self.voice_orb.set_state("listening")
+            if self.media_bridge.is_speaking:
+                self.voice_status.text = "Laiba is speaking..."
+                self.voice_hint.text = "Speak anytime to interrupt Laiba."
+                self.voice_orb.set_state("speaking")
+            else:
+                self.voice_status.text = "Listening..."
+                self.voice_hint.text = "Microphone ready. Speak in Urdu or English."
+                self.voice_orb.set_state("listening")
 
         elif state == "hearing":
             self.voice_status.text = "Hearing you..."
@@ -1111,6 +1120,15 @@ class LaibaKivyApp(App):
             self.voice_orb.set_state("ready")
             self.voice_mic_button.text = "RETRY MIC"
 
+    def on_voice_barge_in(self):
+        if not getattr(self, "voice_active", False):
+            return
+
+        self.voice_processing = False
+        self.voice_status.text = "Hearing you..."
+        self.voice_hint.text = "Laiba stopped. Go ahead with your question."
+        self.voice_orb.set_state("listening")
+
     def _resume_voice_listening(self, delay=0.7):
         retry = {"count": 0}
 
@@ -1119,7 +1137,6 @@ class LaibaKivyApp(App):
                 not self.voice_active
                 or self.voice_muted
                 or self.voice_processing
-                or self.media_bridge.is_speaking
             ):
                 return
 
@@ -1128,6 +1145,7 @@ class LaibaKivyApp(App):
 
             if (
                 not self.media_bridge.recognition_active
+                and not self.media_bridge.recognition_start_pending
                 and retry["count"] < 4
             ):
                 Clock.schedule_once(attempt, 0.9)
@@ -1145,10 +1163,13 @@ class LaibaKivyApp(App):
             return
 
         if state == "speaking":
-            self.voice_processing = True
+            # Gemini is generating no more text now.
+            # Keep the recognizer available during audio playback.
+            self.voice_processing = False
             self.voice_status.text = "Laiba is speaking..."
             self.voice_orb.set_state("speaking")
-            self.voice_hint.text = "Tap MIC ON to interrupt and speak."
+            self.voice_hint.text = "Speak anytime to interrupt Laiba."
+            self._resume_voice_listening(0.35)
 
         elif state in ("done", "error"):
             self.voice_processing = False
