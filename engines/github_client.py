@@ -80,7 +80,7 @@ class GitHubClient:
         allowed = {
             ".py", ".md", ".json", ".txt", ".yaml", ".yml",
             ".toml", ".ini", ".cfg", ".kv", ".spec", ".sh",
-            ".xml", ".gradle", ".properties"
+            ".xml", ".gradle", ".properties", ".backup"
         }
         blocked = {".git", ".laiba_backups", "__pycache__", "venv", ".venv", "bin"}
         secret_names = {".env", "laiba_config.json", "secrets.json", "credentials.json"}

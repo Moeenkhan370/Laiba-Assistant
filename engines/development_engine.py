@@ -98,33 +98,35 @@ class DevelopmentEngine:
         return content
 
     def _project_context(self):
+        """Read complete eligible source files from GitHub for repository analysis."""
         context = []
+
+        if self.github_client is not None:
+            remote_files = self.github_client.fetch_repository_files()
+            if not remote_files:
+                raise RuntimeError("No readable files returned from GitHub repository.")
+
+            for relative, content in sorted(remote_files.items()):
+                context.append(
+                    "\\n--- GITHUB REPOSITORY FILE: {} ---\\n{}".format(
+                        relative, self._redact_sensitive(content)
+                    )
+                )
+            return "\\n".join(context)
+
         for relative in self.inspect_project():
             try:
                 path = self._safe_path(relative)
                 content = path.read_text(encoding="utf-8")
                 context.append(
-                    "\n--- FILE: {} ---\n{}".format(relative, self._redact_sensitive(content[:8000]))
+                    "\\n--- LOCAL PROJECT FILE: {} ---\\n{}".format(
+                        relative, self._redact_sensitive(content)
+                    )
                 )
             except (OSError, UnicodeError, ValueError):
                 continue
-        if self.github_client:
-            try:
-                remote_files = self.github_client.fetch_repository_files()
-                for relative, content in sorted(remote_files.items()):
-                    safe_content = self._redact_sensitive(content)
-                    context.append(
-                        "\n--- GITHUB BRANCH FILE: {} ---\n{}".format(
-                            relative, safe_content[:8000]
-                        )
-                    )
-            except Exception as exc:
-                context.append(
-                    "\\nGITHUB REPOSITORY READ ERROR: {}\\n".format(
-                        type(exc).__name__
-                    )
-                )
-        return "\n".join(context)[:250000]
+
+        return "\\n".join(context)
 
     @staticmethod
     def _parse_json(response):
