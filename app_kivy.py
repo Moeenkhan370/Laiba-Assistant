@@ -725,8 +725,17 @@ class LaibaKivyApp(App):
     def open_live_camera(self, *args):
         self.media_bridge.live_camera()
 
+    def insert_chat_transcript(self, text):
+        text = str(text or "").strip()
+        if not text or not hasattr(self, "user_input"):
+            return
+        current = self.user_input.text.strip()
+        self.user_input.text = (current + " " + text).strip() if current else text
+        self.user_input.focus = True
+        print("LAIBA_CHAT_TEXT_INSERTED", flush=True)
+
     def open_microphone(self, *args):
-        self.media_bridge.microphone()
+        self.media_bridge.chat_microphone()
 
     def send_message(self, *args):
         text = self.user_input.text.strip()

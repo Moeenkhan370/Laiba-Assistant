@@ -25,6 +25,9 @@ class AndroidMediaBridge:
         self.tts_progress_listener = None
         self.tts_language = None
         self.speech_recognizer = None
+        self.chat_speech_recognizer = None
+        self.chat_recognition_listener = None
+        self.chat_recognition_active = False
         self.continuous_listening = False
         self.recognition_listener = None
         self.recognition_active = False
@@ -329,16 +332,24 @@ class AndroidMediaBridge:
         self.is_speaking = False
         self.recognition_active = False
 
+        self.chat_recognition_active = False
+
         def destroy_recognizer():
             try:
                 if self.speech_recognizer:
                     self.speech_recognizer.cancel()
                     self.speech_recognizer.destroy()
+                if self.chat_speech_recognizer:
+                    self.chat_speech_recognizer.cancel()
+                    self.chat_speech_recognizer.destroy()
             except Exception as exc:
                 print("LAIBA_RECOGNIZER_SHUTDOWN:", repr(exc), flush=True)
             finally:
                 self.speech_recognizer = None
                 self.recognition_listener = None
+                self.chat_speech_recognizer = None
+                self.chat_recognition_listener = None
+
 
         try:
             self._run_on_android_ui_thread(destroy_recognizer)
@@ -679,6 +690,211 @@ class AndroidMediaBridge:
         except Exception:
             self._android_ui_runnables.remove(runnable)
             raise
+
+
+    # Separate one-shot recognizer for the ordinary chat microphone.
+    # Call Mode continues using speech_recognizer without modification.
+
+    def chat_microphone(self):
+        print("LAIBA_CHAT_MIC: pressed", flush=True)
+
+        if self.chat_recognition_active:
+            print("LAIBA_CHAT_MIC: already listening", flush=True)
+            return
+
+        self.permissions(
+            ["android.permission.RECORD_AUDIO"],
+            self._start_chat_speech
+        )
+
+    def _start_chat_speech(self):
+        if self.chat_recognition_active:
+            return
+
+        try:
+            self._run_on_android_ui_thread(
+                self._start_chat_speech_ui_thread
+            )
+        except Exception as exc:
+            print("LAIBA_CHAT_MIC_UI_ERROR:", repr(exc), flush=True)
+            self._voice_state("error", str(exc))
+
+    def _reset_chat_recognizer(self):
+        self.chat_recognition_active = False
+
+        def reset():
+            try:
+                if self.chat_speech_recognizer:
+                    self.chat_speech_recognizer.cancel()
+                    self.chat_speech_recognizer.destroy()
+            except Exception as exc:
+                print("LAIBA_CHAT_MIC_RESET:", repr(exc), flush=True)
+            finally:
+                self.chat_speech_recognizer = None
+                self.chat_recognition_listener = None
+
+        try:
+            self._run_on_android_ui_thread(reset)
+        except Exception as exc:
+            print("LAIBA_CHAT_MIC_RESET_QUEUE:", repr(exc), flush=True)
+
+    def _start_chat_speech_ui_thread(self):
+        try:
+            from jnius import autoclass, PythonJavaClass, java_method
+
+            bridge = self
+
+            class ChatListener(PythonJavaClass):
+                __javainterfaces__ = [
+                    "android/speech/RecognitionListener"
+                ]
+                __javacontext__ = "app"
+
+                def __init__(self):
+                    super().__init__()
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onReadyForSpeech(self, params):
+                    print("LAIBA_CHAT_MIC: ready", flush=True)
+
+                @java_method("()V")
+                def onBeginningOfSpeech(self):
+                    print("LAIBA_CHAT_MIC: hearing", flush=True)
+
+                @java_method("(F)V")
+                def onRmsChanged(self, value):
+                    pass
+
+                @java_method("([B)V")
+                def onBufferReceived(self, buffer):
+                    pass
+
+                @java_method("()V")
+                def onEndOfSpeech(self):
+                    print("LAIBA_CHAT_MIC: speech ended", flush=True)
+
+                @java_method("(I)V")
+                def onError(self, error):
+                    print(
+                        "LAIBA_CHAT_MIC_ERROR:",
+                        error,
+                        flush=True
+                    )
+                    Clock.schedule_once(
+                        lambda dt: bridge._reset_chat_recognizer(), 0
+                    )
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onResults(self, results):
+                    try:
+                        SpeechRecognizer = autoclass(
+                            "android.speech.SpeechRecognizer"
+                        )
+                        matches = results.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
+
+                        if matches and matches.size() > 0:
+                            transcript = str(matches.get(0)).strip()
+                            if transcript:
+                                print(
+                                    "LAIBA_CHAT_MIC_RESULT:",
+                                    transcript,
+                                    flush=True
+                                )
+                                Clock.schedule_once(
+                                    lambda dt: bridge.app.insert_chat_transcript(
+                                        transcript
+                                    ), 0
+                                )
+                        else:
+                            print(
+                                "LAIBA_CHAT_MIC: no speech result",
+                                flush=True
+                            )
+                    except Exception as exc:
+                        print(
+                            "LAIBA_CHAT_MIC_RESULT_ERROR:",
+                            repr(exc),
+                            flush=True
+                        )
+                    finally:
+                        Clock.schedule_once(
+                            lambda dt: bridge._reset_chat_recognizer(), 0
+                        )
+
+                @java_method("(Landroid/os/Bundle;)V")
+                def onPartialResults(self, partialResults):
+                    pass
+
+                @java_method("(ILjava/lang/String;Landroid/os/Bundle;)V")
+                def onEvent(self, eventType, params):
+                    pass
+
+            Activity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+            SpeechRecognizer = autoclass(
+                "android.speech.SpeechRecognizer"
+            )
+            Intent = autoclass("android.content.Intent")
+            RecognizerIntent = autoclass(
+                "android.speech.RecognizerIntent"
+            )
+
+            activity = Activity.mActivity
+
+            if not SpeechRecognizer.isRecognitionAvailable(activity):
+                raise RuntimeError(
+                    "Android speech recognition service is unavailable."
+                )
+
+            if self.chat_speech_recognizer is not None:
+                self.chat_speech_recognizer.cancel()
+                self.chat_speech_recognizer.destroy()
+                self.chat_speech_recognizer = None
+
+            recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
+            if recognizer is None:
+                raise RuntimeError(
+                    "Could not create chat speech recognizer."
+                )
+
+            listener = ChatListener()
+            self.chat_speech_recognizer = recognizer
+            self.chat_recognition_listener = listener
+            recognizer.setRecognitionListener(listener)
+
+            intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE,
+                "ur-PK"
+            )
+            intent.putExtra(
+                RecognizerIntent.EXTRA_MAX_RESULTS,
+                3
+            )
+
+            self.chat_recognition_active = True
+            recognizer.startListening(intent)
+
+            print(
+                "LAIBA_CHAT_MIC: started independent recognizer",
+                flush=True
+            )
+
+        except Exception as exc:
+            self.chat_recognition_active = False
+            print(
+                "LAIBA_CHAT_MIC_START_ERROR:",
+                repr(exc),
+                flush=True
+            )
+            self._reset_chat_recognizer()
 
     def microphone(self):
         print("LAIBA_MIC_BUTTON: pressed", flush=True)
