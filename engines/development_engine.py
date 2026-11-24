@@ -5,8 +5,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -112,7 +114,7 @@ class DevelopmentEngine:
                 for relative, content in sorted(remote_files.items()):
                     safe_content = self._redact_sensitive(content)
                     context.append(
-                        "\\n--- GITHUB BRANCH FILE: {} ---\\n{}".format(
+                        "\n--- GITHUB BRANCH FILE: {} ---\n{}".format(
                             relative, safe_content[:8000]
                         )
                     )
@@ -122,7 +124,7 @@ class DevelopmentEngine:
                         type(exc).__name__
                     )
                 )
-        return "\\n".join(context)[:250000]
+        return "\n".join(context)[:250000]
 
     @staticmethod
     def _parse_json(response):
@@ -137,12 +139,32 @@ class DevelopmentEngine:
             raise ValueError("Invalid proposal format.")
         return data
 
+    @staticmethod
+    def _validate_content(path, content):
+        suffix = Path(path).suffix.lower()
+        if suffix == ".py":
+            ast.parse(content)
+        elif suffix == ".json":
+            json.loads(content)
+        elif suffix == ".xml":
+            ET.fromstring(content)
+
     def create_proposal(self, goal):
         if not callable(self.ai_generate):
             return {"status": "error", "message": "Gemini generator is not connected."}
         goal = str(goal or "").strip()
         if not goal:
             return {"status": "error", "message": "Development goal is empty."}
+
+        baseline_snapshot = {}
+        for relative in self.inspect_project():
+            try:
+                baseline_path = self._safe_path(relative)
+                baseline_snapshot[relative] = hashlib.sha256(
+                    baseline_path.read_bytes()
+                ).hexdigest()
+            except (OSError, ValueError):
+                continue
 
         prompt = (
             "You are Laiba's software development engineer. Analyze the supplied "
@@ -179,18 +201,14 @@ class DevelopmentEngine:
                 total_bytes += len(content.encode("utf-8"))
                 if len(content.encode("utf-8")) > self.MAX_FILE_BYTES or total_bytes > self.MAX_TOTAL_BYTES:
                     raise ValueError("Proposal content exceeds the size limit.")
-                if path.suffix.lower() == ".py":
-                    ast.parse(content)
+                self._validate_content(path, content)
                 seen.add(relative)
                 validated.append({"path": relative, "content": content})
 
             proposal_id = "{}-{}".format(int(time.time()), os.urandom(4).hex())
             self.pending[proposal_id] = validated
             self.pending_baselines[proposal_id] = {
-                item["path"]: (
-                    hashlib.sha256((self.root / item["path"]).read_bytes()).hexdigest()
-                    if (self.root / item["path"]).is_file() else None
-                )
+                item["path"]: baseline_snapshot.get(item["path"])
                 for item in validated
             }
             return {
@@ -232,8 +250,7 @@ class DevelopmentEngine:
                     )
                 if target.exists() and not target.is_file():
                     raise ValueError("Target is not a regular file.")
-                if target.suffix.lower() == ".py":
-                    ast.parse(item["content"])
+                self._validate_content(target, item["content"])
                 backup = None
                 if target.is_file():
                     backup = backup_dir / item["path"]
@@ -243,12 +260,30 @@ class DevelopmentEngine:
 
             for target, content, backup in staged:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                fd, temp_name = tempfile.mkstemp(prefix=".laiba_dev_", dir=str(target.parent))
+
+                relative = str(target.relative_to(self.root))
+                actual_now = (
+                    hashlib.sha256(target.read_bytes()).hexdigest()
+                    if target.is_file() else None
+                )
+                if actual_now != expected.get(relative):
+                    raise RuntimeError(
+                        "Proposal is stale: file changed before replacement: " + relative
+                    )
+
+                original_mode = (
+                    stat.S_IMODE(target.stat().st_mode)
+                    if target.is_file() else 0o644
+                )
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=".laiba_dev_", dir=str(target.parent)
+                )
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
                         stream.write(content)
                         stream.flush()
                         os.fsync(stream.fileno())
+                    os.chmod(temp_name, original_mode)
                     os.replace(temp_name, str(target))
                     written.append((target, backup))
                 finally:

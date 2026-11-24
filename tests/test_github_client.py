@@ -18,6 +18,27 @@ class GitHubCommitTests(unittest.TestCase):
                     [{"path": path, "content": "X=1"}], "test", approved=True
                 )
 
+    def test_allows_github_workflow_file_commit(self):
+        responses = [
+            {"sha": "workflow-blob"},
+            {"object": {"sha": "parent1"}},
+            {"tree": {"sha": "tree0"}},
+            {"sha": "tree1"},
+            {"sha": "commit1"},
+            {},
+        ]
+        with patch.object(self.client, "request", side_effect=responses):
+            result = self.client.commit_files(
+                [{
+                    "path": ".github/workflows/android.yml",
+                    "content": "name: Build\\n"
+                }],
+                "Approved workflow update",
+                approved=True
+            )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["commit"], "commit1")
+
     def test_creates_single_commit_for_multiple_files(self):
         responses = [
             {"sha": "blob1"},

@@ -1,4 +1,5 @@
 import json
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -98,6 +99,44 @@ class DevelopmentEngineTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual((self.root / "sample.py").read_text(), "VALUE = 1\n")
         self.assertEqual((self.root / "second.py").read_text(), "VALUE = 1\n")
+
+    def test_rejects_invalid_json(self):
+        engine = self.engine_for("settings.json", "{invalid json")
+        self.assertEqual(engine.create_proposal("Check JSON")["status"], "error")
+
+    def test_rejects_invalid_xml(self):
+        engine = self.engine_for("layout.xml", "<root><broken></root>")
+        self.assertEqual(engine.create_proposal("Check XML")["status"], "error")
+
+    def test_detects_file_changed_during_generation(self):
+        payload = {
+            "summary": "Race test",
+            "changes": [{"path": "sample.py", "content": "VALUE = 2\n"}]
+        }
+
+        def generate(_prompt):
+            (self.root / "sample.py").write_text("VALUE = 99\n", encoding="utf-8")
+            return json.dumps(payload)
+
+        engine = DevelopmentEngine(self.root, ai_generate=generate)
+        proposal = engine.create_proposal("Race condition test")
+        self.assertEqual(proposal["status"], "proposal", proposal)
+        result = engine.apply_proposal(proposal["proposal_id"], confirm=True)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("stale", result["message"].lower())
+        self.assertEqual(
+            (self.root / "sample.py").read_text(encoding="utf-8"),
+            "VALUE = 99\n"
+        )
+
+    def test_preserves_file_permissions(self):
+        target = self.root / "sample.py"
+        target.chmod(0o640)
+        engine = self.engine_for("sample.py", "VALUE = 2\n")
+        proposal = engine.create_proposal("Preserve permissions")
+        result = engine.apply_proposal(proposal["proposal_id"], confirm=True)
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
 
 if __name__ == "__main__":
     unittest.main()

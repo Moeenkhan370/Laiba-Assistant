@@ -216,9 +216,18 @@ class GitHubClient:
                 raise ValueError("Invalid file change.")
             path = str(item.get("path", "")).replace("\\\\", "/")
             parts = path.split("/")
+            workflow_path = (
+                len(parts) > 2
+                and parts[0] == ".github"
+                and parts[1] == "workflows"
+            )
+            hidden_path = any(
+                part.startswith(".") and not (workflow_path and index == 0)
+                for index, part in enumerate(parts)
+            )
             if (not path or path.startswith("/") or
                     any(part in ("", ".", "..") for part in parts) or
-                    any(part.startswith(".") for part in parts) or
+                    hidden_path or
                     not isinstance(item.get("content"), str)):
                 raise ValueError("Unsafe path or invalid file content.")
             if path in seen:
