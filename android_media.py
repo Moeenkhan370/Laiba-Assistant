@@ -1334,7 +1334,7 @@ class AndroidMediaBridge:
 
         def stop():
             if self.speech_recognizer:
-                self.speech_recognizer.stopListening()
+                self.speech_recognizer.cancel()
 
         try:
             self._run_on_android_ui_thread(stop)
@@ -1348,6 +1348,7 @@ class AndroidMediaBridge:
             getattr(app, "voice_active", False)
             and not getattr(app, "voice_muted", True)
             and not getattr(app, "voice_processing", False)
+            and not self.is_speaking
             and not self.recognition_active
             and not self.recognition_start_pending
         ):

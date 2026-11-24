@@ -1170,13 +1170,12 @@ class LaibaKivyApp(App):
             return
 
         if state == "speaking":
-            # Gemini is generating no more text now.
-            # Keep the recognizer available during audio playback.
-            self.voice_processing = False
+            # Keep the microphone cancelled for the entire TTS playback.
+            self.voice_processing = True
+            self.media_bridge.stop_listening()
             self.voice_status.text = "Laiba is speaking..."
             self.voice_orb.set_state("speaking")
-            self.voice_hint.text = "Speak anytime to interrupt Laiba."
-            self._resume_voice_listening(0.35)
+            self.voice_hint.text = "Microphone will restart after Laiba finishes."
 
         elif state in ("done", "error"):
             self.voice_processing = False
@@ -1185,8 +1184,7 @@ class LaibaKivyApp(App):
                 if state == "error":
                     self.voice_status.text = "Voice reply unavailable — listening"
                     self.voice_hint.text = (
-                        "Gemini TTS could not play this reply. "
-                        "You can continue speaking."
+                        "Voice playback failed. You can speak now."
                     )
                 else:
                     self.voice_status.text = "Listening..."
@@ -1206,6 +1204,8 @@ class LaibaKivyApp(App):
             self.voice_status.text = "Laiba is preparing her voice reply..."
             self.voice_orb.set_state("speaking")
         if getattr(self, "voice_active", False):
+            # Cancel microphone before Gemini starts generating audio.
+            self.media_bridge.stop_listening()
             self.media_bridge.speak_voice_reply(str(result))
         else:
             self.media_bridge.speak(str(result))
