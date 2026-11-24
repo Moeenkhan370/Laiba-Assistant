@@ -300,7 +300,7 @@ class ChatbotEngine:
                 message = message.replace(str(key), "[REDACTED]")
         return message
 
-    def _gemini(self, prompt, image_path=None, max_output_tokens=1024, include_history=True):
+    def _gemini(self, prompt, image_path=None, max_output_tokens=512, include_history=True):
         if not self.api_key and not self.api_keys:
             return "Gemini is not connected. Add an API key in Laiba settings."
 
@@ -354,6 +354,7 @@ class ChatbotEngine:
                     "Do not invent facts about Moeen or claim unsupported achievements. "
                     "Understand Urdu, Roman Urdu, English, and mixed language. Never claim "
                     "a device action succeeded unless it was actually executed."
+                    "Keep simple greetings and ordinary replies very concise. Use one or two short sentences when sufficient. Avoid unnecessary introductions and repetition. Give more detail only when the user asks for it."
                 )
             }]},
             "contents": contents,

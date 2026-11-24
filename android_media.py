@@ -505,8 +505,44 @@ class AndroidMediaBridge:
             self._tts_playback_started_at = __import__("time").monotonic()
             self._last_tts_finished_at = 0.0
             self.is_speaking = True
+            duration_ms = 0
+            try:
+                duration_ms = max(0, int(player.getDuration()))
+            except Exception:
+                pass
+
+            if duration_ms <= 0:
+                try:
+                    with wave.open(path, "rb") as audio:
+                        rate = audio.getframerate()
+                        if rate > 0:
+                            duration_ms = int(
+                                audio.getnframes() * 1000 / rate
+                            )
+                except Exception:
+                    pass
+
             self._tts_state("speaking")
             player.start()
+
+            watchdog_delay = (
+                duration_ms / 1000.0 + 5.0
+                if duration_ms > 0 else 90.0
+            )
+
+            print(
+                "LAIBA_TTS_COMPLETION_WATCHDOG:",
+                round(watchdog_delay, 2),
+                "seconds",
+                flush=True
+            )
+
+            Clock.schedule_once(
+                lambda dt: self._finish_gemini_tts(
+                    path, generation, player
+                ),
+                watchdog_delay
+            )
 
             print(
                 "LAIBA_GEMINI_TTS_PLAYBACK_STARTED",
