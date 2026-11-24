@@ -237,10 +237,13 @@ class AndroidMediaBridge:
         self.native_tts.speak(text)
 
     def speak_voice_reply(self, text):
-        """Use Gemini 2.5 Flash Preview TTS only for two-way voice replies."""
+        """Use the existing Gemini TTS engine for two-way voice replies."""
         text = str(text or "").strip()
         if not text:
             return
+
+        self._tts_original_text = text
+        self._last_tts_finished_at = 0.0
 
         self._gemini_tts_generation = getattr(
             self, "_gemini_tts_generation", 0
@@ -499,6 +502,8 @@ class AndroidMediaBridge:
                 return
 
             self._gemini_tts_player = player
+            self._tts_playback_started_at = __import__("time").monotonic()
+            self._last_tts_finished_at = 0.0
             self.is_speaking = True
             self._tts_state("speaking")
             player.start()
@@ -547,6 +552,7 @@ class AndroidMediaBridge:
         self._delete_gemini_tts_audio(path)
 
         self.is_speaking = False
+        self._last_tts_finished_at = __import__("time").monotonic()
         print("LAIBA_GEMINI_TTS_PLAYBACK_DONE", flush=True)
         self._tts_state("done")
 
@@ -1147,9 +1153,8 @@ class AndroidMediaBridge:
                     self.bridge._voice_state(
                         "hearing", "I can hear you. Processing your speech..."
                     )
-                    Clock.schedule_once(
-                        lambda dt: self.bridge._interrupt_voice_reply(), 0
-                    )
+                    # Do not stop TTS on raw microphone activity.
+                    # The recognized transcript is checked for speaker echo first.
 
                 @java_method("(F)V")
                 def onRmsChanged(self, value):
@@ -1244,7 +1249,7 @@ class AndroidMediaBridge:
                                     "processing", "Speech recognized. Preparing reply..."
                                 )
                                 Clock.schedule_once(
-                                    lambda dt: self.bridge.app.send_voice_transcript(text), 0
+                                    lambda dt: self.bridge._handle_recognized_speech(text), 0
                                 )
                             else:
                                 self.bridge._voice_state(
@@ -1347,6 +1352,106 @@ class AndroidMediaBridge:
             and not self.recognition_start_pending
         ):
             self._start_speech()
+
+    @staticmethod
+    def _normalize_voice_text(value):
+        import re
+        return re.sub(
+            r"[^\\w\\s]", " ",
+            str(value or "").casefold(),
+            flags=re.UNICODE
+        ).strip()
+
+    def _is_recent_tts_echo(self, recognized_text):
+        import time
+
+        spoken = self._normalize_voice_text(
+            getattr(self, "_tts_original_text", "")
+        )
+        heard = self._normalize_voice_text(recognized_text)
+
+        if not spoken or not heard:
+            return False
+
+        now = time.monotonic()
+        finished_at = getattr(self, "_last_tts_finished_at", 0.0)
+
+        if not self.is_speaking and (
+            not finished_at or now - finished_at > 2.5
+        ):
+            return False
+
+        heard_words = heard.split()
+        spoken_words = spoken.split()
+
+        # Explicit interruption commands must never be discarded as echo.
+        interrupt_words = {
+            "stop", "wait", "interrupt", "رکو", "رکیں",
+            "روکو", "بس", "سنو"
+        }
+        if any(word in interrupt_words for word in heard_words):
+            return False
+
+        if heard == spoken:
+            return True
+
+        # Ignore a recognized phrase that occurs as a complete word sequence
+        # inside the currently spoken Gemini reply.
+        if len(heard_words) >= 2:
+            width = len(heard_words)
+            if any(
+                spoken_words[i:i + width] == heard_words
+                for i in range(len(spoken_words) - width + 1)
+            ):
+                return True
+
+        # Also catch partial playback transcripts with strong word overlap.
+        if len(heard_words) >= 3:
+            spoken_set = set(spoken_words)
+            common = sum(1 for word in heard_words if word in spoken_set)
+            if common >= 3 and common / len(heard_words) >= 0.78:
+                return True
+
+        return False
+
+    def _handle_recognized_speech(self, text):
+        text = str(text or "").strip()
+        if not text:
+            Clock.schedule_once(
+                lambda dt: self._restart_listening(), 0.5
+            )
+            return
+
+        if self._is_recent_tts_echo(text):
+            print(
+                "LAIBA_VOICE_ECHO_FILTERED:",
+                text[:100],
+                flush=True
+            )
+            self._voice_state(
+                "ready", "Laiba is speaking. Listening for your voice."
+            )
+            Clock.schedule_once(
+                lambda dt: self._restart_listening(), 0.45
+            )
+            return
+
+        if self.is_speaking:
+            print(
+                "LAIBA_VOICE_BARGE_IN: user transcript confirmed",
+                flush=True
+            )
+            self._interrupt_voice_reply()
+            # Let the barge-in UI callback run before setting processing=True.
+            Clock.schedule_once(
+                lambda dt: self.app.send_voice_transcript(text), 0.08
+            )
+            return
+
+        self._voice_state(
+            "processing", "Speech recognized. Preparing reply..."
+        )
+        self.app.send_voice_transcript(text)
 
     def _interrupt_voice_reply(self):
         if not self.is_speaking:
