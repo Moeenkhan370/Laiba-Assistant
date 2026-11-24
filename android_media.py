@@ -21,6 +21,11 @@ class AndroidMediaBridge:
     SPEECH_CODE = 7312
     VIDEO_CODE = 7313
 
+    GEMINI_TTS_MAX_AUDIO_BYTES = 8 * 1024 * 1024
+    GEMINI_TTS_CACHE_MAX_BYTES = 16 * 1024 * 1024
+    GEMINI_TTS_CACHE_MAX_FILES = 2
+    GEMINI_TTS_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
+
     def __init__(self, app):
         self.app = app
         self.diagnostics = get_diagnostics()
@@ -45,7 +50,145 @@ class AndroidMediaBridge:
         self._tts_stop_requested = False
         self._tts_original_text = None
         self._tts_fallback_attempted = False
+        self._gemini_tts_audio_path = None
+        self._gemini_tts_active_paths = set()
+        self._cleanup_gemini_tts_cache()
         self.init_native_tts()
+
+    def _gemini_tts_cache_dir(self):
+        directory = os.path.join(
+            self.app.user_data_dir,
+            "cache",
+            "laiba_gemini_tts"
+        )
+        os.makedirs(directory, exist_ok=True)
+        return directory
+
+    def _delete_gemini_tts_audio(self, path):
+        if not path:
+            return
+
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+                print(
+                    "LAIBA_GEMINI_TTS_CACHE_DELETED:",
+                    os.path.basename(path), flush=True
+                )
+        except OSError as exc:
+            print(
+                "LAIBA_GEMINI_TTS_DELETE_ERROR:",
+                repr(exc), flush=True
+            )
+        finally:
+            active = getattr(
+                self, "_gemini_tts_active_paths", set()
+            )
+            active.discard(path)
+
+            if getattr(self, "_gemini_tts_audio_path", None) == path:
+                self._gemini_tts_audio_path = None
+
+    def _cleanup_gemini_tts_cache(self):
+        try:
+            directory = self._gemini_tts_cache_dir()
+            active = getattr(
+                self, "_gemini_tts_active_paths", set()
+            )
+            now = __import__("time").time()
+
+            files = []
+            for name in os.listdir(directory):
+                if not (
+                    name.startswith("laiba_gemini_tts_")
+                    and name.endswith(".wav")
+                ):
+                    continue
+
+                path = os.path.join(directory, name)
+                if os.path.isfile(path):
+                    files.append(path)
+
+            files.sort(
+                key=lambda path: os.path.getmtime(path),
+                reverse=True
+            )
+
+            # Never delete an audio file currently being played.
+            protected = [
+                path for path in files if path in active
+            ]
+            total = sum(
+                os.path.getsize(path) for path in protected
+            )
+            kept = list(protected)
+
+            for path in files:
+                if path in active:
+                    continue
+
+                size = os.path.getsize(path)
+                age = now - os.path.getmtime(path)
+
+                if (
+                    age > self.GEMINI_TTS_CACHE_MAX_AGE_SECONDS
+                    or len(kept) >= self.GEMINI_TTS_CACHE_MAX_FILES
+                    or total + size > self.GEMINI_TTS_CACHE_MAX_BYTES
+                ):
+                    self._delete_gemini_tts_audio(path)
+                    continue
+
+                kept.append(path)
+                total += size
+
+            print(
+                "LAIBA_GEMINI_TTS_CACHE_STATUS:",
+                "files=", len(kept),
+                "bytes=", total,
+                flush=True
+            )
+
+        except Exception as exc:
+            print(
+                "LAIBA_GEMINI_TTS_CACHE_CLEAN_ERROR:",
+                repr(exc), flush=True
+            )
+
+    def _delete_all_gemini_tts_audio(self):
+        try:
+            directories = [
+                self._gemini_tts_cache_dir(),
+                self.app.user_data_dir,
+            ]
+
+            active = getattr(
+                self, "_gemini_tts_active_paths", set()
+            )
+
+            for directory in directories:
+                for name in os.listdir(directory):
+                    if (
+                        name.startswith("laiba_gemini_tts_")
+                        and name.endswith(".wav")
+                    ):
+                        path = os.path.join(directory, name)
+                        if path in active:
+                            active.discard(path)
+                        self._delete_gemini_tts_audio(path)
+
+            active.clear()
+            self._gemini_tts_audio_path = None
+
+            print(
+                "LAIBA_GEMINI_TTS_ALL_AUDIO_CLEANED",
+                flush=True
+            )
+
+        except Exception as exc:
+            print(
+                "LAIBA_GEMINI_TTS_CACHE_CLEAR_ERROR:",
+                repr(exc), flush=True
+            )
 
     @staticmethod
     def _split_tts_text(text, max_chars=3500):
@@ -204,9 +347,15 @@ class AndroidMediaBridge:
                         last_error = "Gemini returned empty audio."
                         continue
 
-                    os.makedirs(self.app.user_data_dir, exist_ok=True)
+                    if len(audio_bytes) > self.GEMINI_TTS_MAX_AUDIO_BYTES:
+                        last_error = "Gemini audio exceeds 8 MB limit."
+                        raise ValueError(last_error)
+
+                    cache_dir = self._gemini_tts_cache_dir()
+                    self._cleanup_gemini_tts_cache()
+
                     path = os.path.join(
-                        self.app.user_data_dir,
+                        cache_dir,
                         "laiba_gemini_tts_{}.wav".format(
                             __import__("time").time_ns()
                         )
@@ -223,6 +372,10 @@ class AndroidMediaBridge:
                             output.setsampwidth(2)
                             output.setframerate(sample_rate)
                             output.writeframes(audio_bytes)
+
+                    self._gemini_tts_active_paths.add(path)
+                    self._gemini_tts_audio_path = path
+                    self._cleanup_gemini_tts_cache()
 
                     print(
                         "LAIBA_GEMINI_TTS_GENERATION: PASS",
@@ -271,10 +424,7 @@ class AndroidMediaBridge:
 
     def _play_gemini_tts_audio(self, path, text, generation):
         if generation != getattr(self, "_gemini_tts_generation", 0):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+            self._delete_gemini_tts_audio(path)
             return
 
         player = None
@@ -344,6 +494,7 @@ class AndroidMediaBridge:
                 self, "_gemini_tts_generation", 0
             ):
                 player.release()
+                self._delete_gemini_tts_audio(path)
                 return
 
             self._gemini_tts_player = player
@@ -372,11 +523,7 @@ class AndroidMediaBridge:
             self._gemini_tts_completion_listener = None
             self._gemini_tts_error_listener = None
 
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
+            self._delete_gemini_tts_audio(path)
             self._fallback_voice_reply(text, generation)
 
     def _finish_gemini_tts(self, path, generation, player):
@@ -396,10 +543,7 @@ class AndroidMediaBridge:
         self._gemini_tts_completion_listener = None
         self._gemini_tts_error_listener = None
 
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        self._delete_gemini_tts_audio(path)
 
         self.is_speaking = False
         print("LAIBA_GEMINI_TTS_PLAYBACK_DONE", flush=True)
@@ -424,10 +568,7 @@ class AndroidMediaBridge:
         self._gemini_tts_completion_listener = None
         self._gemini_tts_error_listener = None
 
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        self._delete_gemini_tts_audio(path)
 
         print(
             "LAIBA_GEMINI_TTS_FALLBACK_TO_ANDROID_NATIVE",
@@ -455,6 +596,11 @@ class AndroidMediaBridge:
 
         self._gemini_tts_completion_listener = None
         self._gemini_tts_error_listener = None
+
+        for audio_path in list(
+            getattr(self, "_gemini_tts_active_paths", set())
+        ):
+            self._delete_gemini_tts_audio(audio_path)
 
         try:
             if self.native_tts:
@@ -506,6 +652,29 @@ class AndroidMediaBridge:
         self.is_speaking = False
         self.recognition_active = False
 
+        # Release Gemini MediaPlayer before deleting its audio file.
+        player = getattr(self, "_gemini_tts_player", None)
+        self._gemini_tts_player = None
+        self._gemini_tts_generation = (
+            getattr(self, "_gemini_tts_generation", 0) + 1
+        )
+
+        if player:
+            try:
+                player.stop()
+            except Exception:
+                pass
+            try:
+                player.release()
+            except Exception as exc:
+                print(
+                    "LAIBA_GEMINI_TTS_SHUTDOWN_RELEASE_ERROR:",
+                    repr(exc), flush=True
+                )
+
+        self._gemini_tts_completion_listener = None
+        self._gemini_tts_error_listener = None
+
         def destroy_recognizer():
             try:
                 if self.speech_recognizer:
@@ -529,6 +698,7 @@ class AndroidMediaBridge:
             print("LAIBA_PY_TTS_SHUTDOWN:", repr(exc), flush=True)
         finally:
             self.native_tts = None
+            self._delete_all_gemini_tts_audio()
 
     def message(self, text):
         Clock.schedule_once(
