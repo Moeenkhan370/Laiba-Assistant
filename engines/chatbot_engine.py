@@ -492,7 +492,119 @@ class ChatbotEngine:
             "براہِ کرم کچھ دیر بعد دوبارہ کوشش کریں۔"
         )
 
-    def process_message(self, user_text, image_path=None):
+    def _gemma_chat(self, prompt, image_path=None):
+        """Fixed Gemma model exclusively for typed chat."""
+        model = "gemma-4-26b-a4b-it"
+        unavailable = (
+            "میرا مقررہ چیٹ ماڈل Gemma 4 26B A4B اس وقت دستیاب نہیں۔ "
+            "براہِ کرم کچھ دیر بعد دوبارہ کوشش کریں۔"
+        )
+
+        api_key = self.api_key or next(
+            (k for k in self.api_keys if k), ""
+        )
+        if not api_key:
+            return "Gemma Chat کے لیے Gemini API key دستیاب نہیں۔"
+
+        parts = [{"text": prompt}]
+
+        if image_path:
+            image = Path(image_path)
+            if not image.is_file():
+                return "Image file was not found."
+
+            mime, _ = mimetypes.guess_type(str(image))
+            if mime not in {"image/jpeg", "image/png", "image/webp"}:
+                return "Unsupported image format."
+
+            try:
+                import base64
+                image_bytes = image.read_bytes()
+                if len(image_bytes) > 20 * 1024 * 1024:
+                    return "Image is too large. Maximum size is 20 MB."
+                parts.append({
+                    "inline_data": {
+                        "mime_type": mime,
+                        "data": base64.b64encode(image_bytes).decode("ascii")
+                    }
+                })
+            except OSError:
+                return "Could not read image."
+
+        contents = list(self.chat_history[-12:]) + [
+            {"role": "user", "parts": parts}
+        ]
+
+        payload = {
+            "system_instruction": {"parts": [{
+                "text": (
+                    "You are Laiba, a helpful assistant. Understand Urdu, "
+                    "Roman Urdu, English, and mixed language. Never claim "
+                    "a device action succeeded unless it was executed."
+                )
+            }]},
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 1024
+            }
+        }
+
+        url = "{}/models/{}:generateContent".format(
+            self.api_base.rstrip("/"), model
+        )
+
+        try:
+            response = self._request_with_retry(
+                "POST", url,
+                params={"key": api_key},
+                json=payload,
+                timeout=self.timeout
+            )
+
+            if not response.ok:
+                detail = self._safe_error(response)
+                status = response.status_code
+                response.close()
+                print("[LAIBA] Fixed Gemma chat HTTP", status,
+                      self._redact_api_keys(detail))
+                return unavailable
+
+            try:
+                data = response.json()
+            finally:
+                response.close()
+
+            candidates = data.get("candidates") or []
+            if not candidates:
+                return unavailable
+
+            answer = "".join(
+                part.get("text", "")
+                for part in candidates[0].get("content", {}).get("parts", [])
+                if isinstance(part, dict)
+            ).strip()
+
+            if not answer:
+                return unavailable
+
+            self.chat_history.extend([
+                {"role": "user", "parts": parts},
+                {"role": "model", "parts": [{"text": answer}]}
+            ])
+            self.chat_history = self.chat_history[-24:]
+            self.save_chat_history()
+
+            print("[LAIBA] FIXED CHAT MODEL:", model)
+            return answer
+
+        except (requests.RequestException, ValueError, KeyError,
+                IndexError, TypeError) as exc:
+            print("[LAIBA] Fixed Gemma chat error:",
+                  self._redact_api_keys(exc))
+            return unavailable
+
+    def process_message(self, user_text, image_path=None, chat_only=False):
         text = str(user_text or "").strip()
         if not text and not image_path: return "Please type or say something."
         self.interrupt_flag = False
@@ -511,4 +623,8 @@ class ChatbotEngine:
             return "Opening apps and websites requires the Android intent bridge; that integration is not yet enabled in this build."
         build = self.handle_buildozer_commands(text)
         if build: return build
+        if chat_only:
+            return self._gemma_chat(
+                text or "Please analyze this image.", image_path
+            )
         return self._gemini(text or "Please analyze this image.", image_path)

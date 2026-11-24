@@ -754,7 +754,7 @@ class LaibaKivyApp(App):
 
         def worker():
             try:
-                result = self.chatbot.process_message(text)
+                result = self.chatbot.process_message(text, chat_only=True)
             except Exception as exc:
                 result = "Network or AI error: " + str(exc)
             Clock.schedule_once(
@@ -785,7 +785,7 @@ class LaibaKivyApp(App):
 
         def worker():
             try:
-                result = self.chatbot.process_message(text)
+                result = self.chatbot.process_message(text, chat_only=True)
             except Exception as exc:
                 result = "Network or AI error: " + str(exc)
 
