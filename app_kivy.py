@@ -934,6 +934,7 @@ class LaibaKivyApp(App):
     def toggle_voice_mic(self, *args):
         if not self.voice_active:
             return
+
         if self.voice_muted:
             self.voice_muted = False
             self.voice_mic_button.text = "MIC ON"
@@ -947,6 +948,18 @@ class LaibaKivyApp(App):
                 self.voice_status.text = "Listening..."
                 self.voice_orb.set_state("listening")
                 self.media_bridge.microphone()
+
+        elif self.media_bridge.is_speaking:
+            # Button press while Laiba speaks = barge-in.
+            self.media_bridge.stop_speaking()
+            self.voice_processing = False
+            self.voice_status.text = "Listening..."
+            self.voice_hint.text = "Reply interrupted. I'm listening."
+            self.voice_orb.set_state("listening")
+            Clock.schedule_once(
+                lambda dt: self.media_bridge.microphone(), 0.25
+            )
+
         else:
             self.voice_muted = True
             self.voice_mic_button.text = "MIC OFF"
@@ -1098,12 +1111,36 @@ class LaibaKivyApp(App):
             self.voice_orb.set_state("ready")
             self.voice_mic_button.text = "RETRY MIC"
 
+    def _resume_voice_listening(self, delay=0.7):
+        retry = {"count": 0}
+
+        def attempt(dt):
+            if (
+                not self.voice_active
+                or self.voice_muted
+                or self.voice_processing
+                or self.media_bridge.is_speaking
+            ):
+                return
+
+            self.media_bridge._restart_listening()
+            retry["count"] += 1
+
+            if (
+                not self.media_bridge.recognition_active
+                and retry["count"] < 4
+            ):
+                Clock.schedule_once(attempt, 0.9)
+
+        Clock.schedule_once(attempt, delay)
+
     def on_tts_state(self, state):
         if state == "error":
             self.diagnostics.record(
-                "tts", "Playback callback reported error",
-                severity="ERROR"
+                "tts", "Gemini TTS playback failed; restoring microphone",
+                severity="WARNING"
             )
+
         if not getattr(self, "voice_active", False):
             return
 
@@ -1111,45 +1148,26 @@ class LaibaKivyApp(App):
             self.voice_processing = True
             self.voice_status.text = "Laiba is speaking..."
             self.voice_orb.set_state("speaking")
-            self.voice_hint.text = "I'll listen again when my reply is complete."
+            self.voice_hint.text = "Tap MIC ON to interrupt and speak."
 
-        elif state == "done":
+        elif state in ("done", "error"):
             self.voice_processing = False
+
             if not self.voice_muted:
-                self.voice_status.text = "Listening..."
+                if state == "error":
+                    self.voice_status.text = "Voice reply unavailable — listening"
+                    self.voice_hint.text = (
+                        "Gemini TTS could not play this reply. "
+                        "You can continue speaking."
+                    )
+                else:
+                    self.voice_status.text = "Listening..."
+                    self.voice_hint.text = "I'm listening. Speak now."
+
                 self.voice_orb.set_state("listening")
-                self.voice_hint.text = "I'm listening. Speak now."
-                retry = {"count": 0}
-
-                def resume_listening(dt):
-                    if (
-                        not self.voice_active
-                        or self.voice_muted
-                        or self.voice_processing
-                        or self.media_bridge.is_speaking
-                    ):
-                        return
-
-                    self.media_bridge._restart_listening()
-                    retry["count"] += 1
-
-                    if (
-                        not self.media_bridge.recognition_active
-                        and retry["count"] < 3
-                    ):
-                        Clock.schedule_once(resume_listening, 1.0)
-
-                Clock.schedule_once(resume_listening, 0.8)
-
-        elif state == "error":
-            self.voice_processing = False
-            self.voice_muted = True
-            self.voice_status.text = "Laiba voice playback failed"
-            self.voice_orb.set_state("ready")
-            self.voice_hint.text = (
-                "Playback failed. Tap RETRY MIC to continue the conversation."
-            )
-            self.voice_mic_button.text = "RETRY MIC"
+                self._resume_voice_listening(
+                    0.5 if state == "error" else 0.8
+                )
 
     def finish_reply(self, result, thinking):
         if thinking.parent:

@@ -114,13 +114,19 @@ class AndroidMediaBridge:
         ))
 
         if not keys:
-            print("LAIBA_GEMINI_TTS_FALLBACK: No API key", flush=True)
-            self.speak(text)
+            print("LAIBA_GEMINI_TTS_ERROR: No API key", flush=True)
+            self._tts_state("error")
             return
 
         def worker():
             import requests
             import re
+            import time
+            request_started = time.monotonic()
+            chatbot = getattr(self.app, "chatbot", None)
+            http_session = getattr(chatbot, "session", None)
+            if http_session is None:
+                http_session = requests
 
             model = "gemini-3.8-flash-lite-tts"
             url = (
@@ -147,11 +153,11 @@ class AndroidMediaBridge:
 
             for key in keys:
                 try:
-                    response = requests.post(
+                    response = http_session.post(
                         url,
                         params={"key": key},
                         json=payload,
-                        timeout=60
+                        timeout=(10, 60)
                     )
 
                     if not response.ok:
@@ -223,6 +229,8 @@ class AndroidMediaBridge:
                         "model=", model,
                         "bytes=", len(audio_bytes),
                         "rate=", sample_rate,
+                        "request_seconds=",
+                        round(time.monotonic() - request_started, 2),
                         flush=True
                     )
                     Clock.schedule_once(
@@ -240,26 +248,26 @@ class AndroidMediaBridge:
                     )
 
             print(
-                "LAIBA_GEMINI_TTS_FALLBACK_TO_ANDROID_NATIVE:",
+                "LAIBA_GEMINI_TTS_FAILED:",
                 last_error, flush=True
             )
             if self.diagnostics:
                 self.diagnostics.record(
-                    "tts", "Gemini TTS unavailable; Android Native TTS fallback",
+                    "tts", "Gemini TTS request failed; listening recovery requested",
                     last_error, severity="WARNING"
                 )
             Clock.schedule_once(
-                lambda dt: self._fallback_voice_reply(
-                    text, generation
-                ), 0
+                lambda dt: self._tts_state("error"), 0
             )
 
         Thread(target=worker, daemon=True).start()
 
     def _fallback_voice_reply(self, text, generation):
+        # Deliberately do not switch engines: voice replies stay on Gemini TTS.
         if generation != getattr(self, "_gemini_tts_generation", 0):
             return
-        self.speak(text)
+        print("LAIBA_GEMINI_TTS_NO_ENGINE_FALLBACK", flush=True)
+        self._tts_state("error")
 
     def _play_gemini_tts_audio(self, path, text, generation):
         if generation != getattr(self, "_gemini_tts_generation", 0):
@@ -1140,7 +1148,6 @@ class AndroidMediaBridge:
             and not getattr(app, "voice_muted", True)
             and not getattr(app, "voice_processing", False)
             and not self.is_speaking
-            and not (self.native_tts and self.native_tts.pending_speech)
             and not self.recognition_active
         ):
             self._start_speech()
