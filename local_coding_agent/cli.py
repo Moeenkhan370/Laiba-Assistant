@@ -1,7 +1,7 @@
 """Command line interface for the offline coding agent."""
 import argparse
 import json
-from .agent import LocalCodingAgent
+from . import LocalCodingAgent
 
 def main():
     parser = argparse.ArgumentParser(description="Offline Laiba repository coding agent")

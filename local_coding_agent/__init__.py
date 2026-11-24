@@ -1,4 +1,4 @@
 """Independent offline repository intelligence for Laiba."""
-from .agent import LocalCodingAgent
+from .hardening import LocalCodingAgent
 
 __all__ = ["LocalCodingAgent"]
