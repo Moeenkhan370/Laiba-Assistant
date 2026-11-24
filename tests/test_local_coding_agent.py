@@ -89,5 +89,52 @@ class LocalCodingAgentTests(unittest.TestCase):
         self.assertTrue(any(x.get("kind") == "async_function" and
                             x.get("parent") == "Outer.Inner" for x in symbols))
 
+
+    def test_relative_imports_resolve_to_local_files(self):
+        package = self.root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "core.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (package / "worker.py").write_text(
+            "from .core import VALUE\nfrom . import core\n", encoding="utf-8")
+        agent = LocalCodingAgent(self.root)
+        agent.scan()
+        report = agent.analyze()
+        deps = [x for x in report["dependencies"] if x["source"] == "pkg/worker.py"]
+        self.assertTrue(deps)
+        self.assertTrue(all(x["kind"] == "local" for x in deps))
+        self.assertTrue(any(x["target"] == "pkg/core.py" for x in deps))
+
+    def test_scan_resets_previous_analysis(self):
+        agent = LocalCodingAgent(self.root)
+        agent.scan()
+        agent.analyze()
+        (self.root / "main.py").unlink()
+        agent.scan()
+        report = agent.analyze()
+        self.assertNotIn("main.py", report["symbols"])
+        self.assertNotIn("main.py", [x["path"] for x in report["files"]])
+
+    def test_context_limit_preserves_complete_lines(self):
+        agent = LocalCodingAgent(self.root)
+        agent.scan()
+        agent.analyze()
+        result = agent.build_context("voice listen call", max_chars=180)
+        self.assertLessEqual(len(result["context"]), 180)
+        self.assertEqual(result["characters"], len(result["context"]))
+        for line in result["context"].splitlines():
+            if line and not line.startswith("--- "):
+                self.assertRegex(line, r"^\d+: ")
+
+    def test_context_rejects_invalid_limits(self):
+        agent = LocalCodingAgent(self.root)
+        agent.scan()
+        agent.analyze()
+        with self.assertRaises(ValueError):
+            agent.build_context("voice", max_chars=0)
+        with self.assertRaises(ValueError):
+            agent.build_context("voice", limit=0)
+
+
 if __name__ == "__main__":
     unittest.main()

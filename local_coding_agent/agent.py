@@ -1,7 +1,9 @@
 """Offline repository scanner and static coding intelligence agent."""
 import ast
 import json
+import os
 import re
+import sys
 from pathlib import Path
 
 class LocalCodingAgent:
@@ -35,7 +37,10 @@ class LocalCodingAgent:
         """Read eligible text files; never follow symlinks or enter protected dirs."""
         found = {}
         total = 0
-        for current, dirs, names in __import__("os").walk(str(self.root), followlinks=False):
+        self.records = {}
+        self.findings = []
+        self.dependencies = []
+        for current, dirs, names in os.walk(str(self.root), followlinks=False):
             current_path = Path(current)
             dirs[:] = sorted(
                 d for d in dirs
@@ -77,6 +82,33 @@ class LocalCodingAgent:
         if value.endswith(".__init__"):
             value = value[:-9]
         return value
+
+    def _resolve_import(self, source_path, module, imported_names, module_paths):
+        """Resolve absolute and relative imports inside this repository."""
+        if module.startswith("."):
+            source_module = self._module_name(source_path)
+            package = (source_module.split(".") if source_path.endswith("/__init__.py")
+                       or source_path == "__init__.py" else source_module.split(".")[:-1])
+            level = len(module) - len(module.lstrip("."))
+            base = package[:max(0, len(package) - level + 1)]
+            suffix = module[level:]
+            candidate = ".".join(base + (suffix.split(".") if suffix else []))
+        else:
+            candidate = module
+
+        candidates = [candidate] if candidate else []
+        for name in imported_names:
+            child = ".".join(part for part in (candidate, name) if part)
+            if child:
+                candidates.append(child)
+        for item in candidates:
+            if item in module_paths:
+                return module_paths[item], "local"
+
+        top = module.lstrip(".").split(".", 1)[0] if module else ""
+        if top and top in getattr(sys, "stdlib_module_names", set()):
+            return "stdlib", "stdlib"
+        return "external_or_unresolved", "external_or_unresolved"
 
     def analyze(self):
         """Build AST inventory, local dependency map, and conservative bug signals."""
@@ -133,12 +165,13 @@ class LocalCodingAgent:
 
                 def visit_Import(self, node):
                     for alias in node.names:
-                        imports.append((alias.name, node.lineno))
+                        imports.append((alias.name, node.lineno, []))
                     self.generic_visit(node)
 
                 def visit_ImportFrom(self, node):
                     module = "." * node.level + (node.module or "")
-                    imports.append((module, node.lineno))
+                    names = [alias.name for alias in node.names if alias.name != "*"]
+                    imports.append((module, node.lineno, names))
                     self.generic_visit(node)
 
             visitor = ScopeVisitor()
@@ -146,14 +179,17 @@ class LocalCodingAgent:
             symbols.sort(key=lambda x: (x["line"], x["name"]))
             records[path] = {
                 "symbols": sorted(symbols, key=lambda x: (x["line"], x["name"])),
-                "imports": [{"module": m, "line": n} for m, n in imports]
+                "imports": [
+                    {"module": m, "line": n, "names": names}
+                    for m, n, names in imports
+                ]
             }
 
-            for module, line in imports:
-                resolved = module_paths.get(module, "external_or_unresolved")
+            for module, line, names in imports:
+                resolved, kind = self._resolve_import(path, module, names, module_paths)
                 dependencies.append({
-                    "source": path, "line": line,
-                    "module": module, "target": resolved
+                    "source": path, "line": line, "module": module,
+                    "names": names, "target": resolved, "kind": kind
                 })
 
             findings.extend(self._inspect_ast(path, tree))
@@ -271,49 +307,51 @@ class LocalCodingAgent:
         return sorted(ranked, key=lambda x: (-x["score"], x["path"]))[:limit]
 
     def build_context(self, request, max_chars=14000, limit=12):
-        """Return only relevant code excerpts with exact source line numbers."""
+        """Build bounded excerpts without cutting source lines."""
+        if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
+            raise ValueError("max_chars must be a positive integer.")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be a positive integer.")
+
         matches = self.find_feature_locations(request, limit=limit)
         terms = self._terms(request)
-        sections, used = [], 0
-
+        sections, used, truncated = [], 0, False
         for match in matches:
             path = match["path"]
             lines = self.files[path].splitlines()
             selected = set()
-
             for symbol in match["matching_symbols"]:
-                start = max(1, symbol["line"] - 2)
-                end = min(len(lines), symbol["end_line"] + 2)
-                selected.update(range(start, end + 1))
-
+                selected.update(range(max(1, symbol["line"] - 2),
+                    min(len(lines), symbol["end_line"] + 2) + 1))
             if not selected:
                 for number, line in enumerate(lines, 1):
                     if any(term in line.casefold() for term in terms):
                         selected.update(range(max(1, number - 2),
-                                               min(len(lines), number + 2) + 1))
-
+                            min(len(lines), number + 2) + 1))
             if not selected:
                 selected.update(range(1, min(len(lines), 12) + 1))
 
-            excerpt = "\n".join(
-                "{}: {}".format(number, lines[number - 1])
-                for number in sorted(selected)
-            )
-            section = "\n--- {} ---\n{}".format(path, excerpt)
-            if used + len(section) > max_chars:
-                remaining = max_chars - used
-                if remaining > 100:
-                    sections.append(section[:remaining])
+            header = "--- {} ---\n".format(path)
+            if max_chars - used <= len(header):
+                truncated = True
                 break
-            sections.append(section)
-            used += len(section)
+            section = header
+            used += len(header)
+            for number in sorted(selected):
+                item = "{}: {}\n".format(number, lines[number - 1])
+                if len(item) > max_chars - used:
+                    truncated = True
+                    break
+                section += item
+                used += len(item)
+            sections.append(section.rstrip("\n"))
+            if truncated:
+                break
 
-        return {
-            "request": str(request),
-            "matches": matches,
-            "context": "\n".join(sections),
-            "characters": used
-        }
+        context = "\n".join(sections)
+        return {"request": str(request), "matches": matches,
+                "context": context, "characters": len(context),
+                "truncated": truncated}
 
     def analyze_feature(self, request, max_chars=14000):
         return {
