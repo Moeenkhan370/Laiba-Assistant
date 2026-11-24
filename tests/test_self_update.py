@@ -172,5 +172,99 @@ class SelfUpdateTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("downgrade", result["changelog"].lower())
 
+
+    def test_mark_pending_rejects_invalid_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = SelfUpdateEngine(
+                "1.0.0",
+                state_path=str(Path(directory) / "state.json")
+            )
+            with self.assertRaises(ValueError):
+                engine.mark_update_pending(
+                    "1.1.0", "app.apk", "invalid"
+                )
+
+    def test_mark_pending_rejects_non_newer_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = SelfUpdateEngine(
+                "1.0.0",
+                state_path=str(Path(directory) / "state.json")
+            )
+            with self.assertRaises(ValueError):
+                engine.mark_update_pending(
+                    "1.0.0", "app.apk", "a" * 64
+                )
+
+    def test_pending_update_accepts_newer_installed_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = SelfUpdateEngine(
+                "1.0.0",
+                state_path=str(Path(directory) / "state.json")
+            )
+            engine.mark_update_pending(
+                "1.1.0", "app.apk", "a" * 64
+            )
+            result = engine.resolve_update_state("1.2.0")
+            self.assertEqual(result["status"], "confirmed")
+
+    def test_verify_missing_file_returns_safe_error(self):
+        valid, message = SelfUpdateEngine.verify_file(
+            "missing-laiba-update.apk", "a" * 64
+        )
+        self.assertFalse(valid)
+        self.assertIn("unreadable", message)
+
+    def test_rejects_invalid_https_port(self):
+        with self.assertRaises(ValueError):
+            SelfUpdateEngine._https_url(
+                "https://example.com:99999/update.json",
+                "Manifest URL"
+            )
+
+    def test_rejects_unknown_state_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = SelfUpdateEngine(
+                "1.0.0",
+                state_path=str(Path(directory) / "state.json")
+            )
+            with self.assertRaises(ValueError):
+                engine.save_update_state({"status": "unknown"})
+
+    def test_oversized_state_recovers_safely(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(
+                " " * (SelfUpdateEngine.MAX_STATE_BYTES + 1),
+                encoding="utf-8"
+            )
+            engine = SelfUpdateEngine(
+                "1.0.0", state_path=str(path)
+            )
+            result = engine.load_update_state()
+            self.assertEqual(result["status"], "failed")
+
+    def test_non_string_manifest_changelog_is_rejected(self):
+        engine = SelfUpdateEngine(
+            "1.0.0", "https://example.com/update.json"
+        )
+        response = MagicMock()
+        response.status = 200
+        response.geturl.return_value = "https://example.com/update.json"
+        response.read.return_value = json.dumps({
+            "version": "1.1.0",
+            "apk_url": "https://example.com/app.apk",
+            "sha256": "a" * 64,
+            "changelog": {"unexpected": "object"}
+        }).encode()
+
+        with patch(
+            "engines.self_update.urllib.request.urlopen"
+        ) as urlopen:
+            urlopen.return_value.__enter__.return_value = response
+            result = engine.check_for_updates()
+
+        self.assertEqual(result["status"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()

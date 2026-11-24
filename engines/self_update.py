@@ -12,6 +12,8 @@ from config import CURRENT_CONFIG
 
 
 class SelfUpdateEngine:
+    MAX_STATE_BYTES = 65536
+    VALID_STATES = {"idle", "pending", "confirmed", "failed"}
     def __init__(self, current_version=None, update_url=None, timeout=12, state_path=None):
         self.version = current_version or CURRENT_CONFIG.get("VERSION", "1.0.0")
         self.update_url = CURRENT_CONFIG.get("UPDATE_SERVER_URL", "") if update_url is None else update_url
@@ -31,14 +33,28 @@ class SelfUpdateEngine:
     def _https_url(value, field_name):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("{} must be a non-empty HTTPS URL.".format(field_name))
+
         parsed = urlparse(value.strip())
+
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ValueError("{} contains an invalid port.".format(field_name))
+
         if (
             parsed.scheme.lower() != "https"
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
+            or parsed.fragment
+            or (port is not None and not 1 <= port <= 65535)
         ):
-            raise ValueError("{} must use a valid HTTPS URL without embedded credentials.".format(field_name))
+            raise ValueError(
+                "{} must be a valid HTTPS URL without credentials or fragments.".format(
+                    field_name
+                )
+            )
+
         return value.strip()
 
     @staticmethod
@@ -102,12 +118,19 @@ class SelfUpdateEngine:
             ):
                 raise ValueError("Manifest SHA-256 must contain exactly 64 hex characters.")
 
+            changelog = manifest.get(
+                "changelog", "No changelog provided."
+            )
+            if not isinstance(changelog, str):
+                raise ValueError("Manifest changelog must be text.")
+            changelog = changelog.strip()[:4000]
+
             return {
                 "status": "ok",
                 "update_available": available,
                 "current_version": self.version,
                 "latest_version": latest,
-                "changelog": str(manifest.get("changelog", "No changelog provided.")),
+                "changelog": changelog,
                 "download_url": apk_url,
                 "sha256": sha256,
                 "signature": manifest.get("signature")
@@ -139,8 +162,9 @@ class SelfUpdateEngine:
 
         class HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
-                if urlparse(newurl).scheme.lower() != "https":
-                    raise ValueError("HTTPS downgrade redirect rejected.")
+                SelfUpdateEngine._https_url(
+                    newurl, "APK redirect URL"
+                )
                 return super().redirect_request(
                     req, fp, code, msg, headers, newurl
                 )
@@ -195,26 +219,55 @@ class SelfUpdateEngine:
             r"[0-9a-fA-F]{64}", expected_sha256
         ):
             return False, "A valid 64-character SHA-256 digest is required."
+
         digest = hashlib.sha256()
-        with open(path, "rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        try:
+            with open(path, "rb") as stream:
+                for chunk in iter(
+                    lambda: stream.read(1024 * 1024), b""
+                ):
+                    digest.update(chunk)
+        except OSError:
+            return False, "APK file is missing or unreadable."
+
         valid = digest.hexdigest().lower() == expected_sha256.lower()
-        return valid, "SHA-256 verified." if valid else "SHA-256 mismatch."
+        return (
+            valid,
+            "SHA-256 verified." if valid else "SHA-256 mismatch."
+        )
 
     def save_update_state(self, state):
         if not self.state_path:
             raise ValueError("Update state path is not configured.")
+
         if not isinstance(state, dict):
             raise ValueError("Update state must be a JSON object.")
+
+        status = state.get("status", "idle")
+        if status not in self.VALID_STATES:
+            raise ValueError("Invalid update state status.")
+
+        payload = json.dumps(
+            state, ensure_ascii=False, separators=(",", ":")
+        )
+
+        encoded = payload.encode("utf-8")
+        if len(encoded) > self.MAX_STATE_BYTES:
+            raise ValueError("Update state exceeds size limit.")
+
         directory = os.path.dirname(os.path.abspath(self.state_path))
         os.makedirs(directory, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=".update-state-", dir=directory)
+
+        fd, temporary = tempfile.mkstemp(
+            prefix=".update-state-", dir=directory
+        )
+
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(state, stream)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
+
             os.replace(temporary, self.state_path)
         finally:
             if os.path.exists(temporary):
@@ -223,39 +276,81 @@ class SelfUpdateEngine:
     def load_update_state(self):
         if not self.state_path or not os.path.isfile(self.state_path):
             return {"status": "idle"}
+
         try:
+            if os.path.getsize(self.state_path) > self.MAX_STATE_BYTES:
+                raise ValueError("Update state exceeds size limit.")
+
             with open(self.state_path, encoding="utf-8") as stream:
                 state = json.load(stream)
+
             if not isinstance(state, dict):
-                raise ValueError("Invalid update state.")
+                raise ValueError("Invalid update state object.")
+
+            if state.get("status", "idle") not in self.VALID_STATES:
+                raise ValueError("Unknown update state.")
+
             return state
+
         except (OSError, ValueError, UnicodeError, TypeError):
             return {
                 "status": "failed",
-                "reason": "Update state file is invalid or unreadable."
+                "reason": "Update state is invalid or unreadable."
             }
 
     def mark_update_pending(self, target_version, apk_path, sha256):
-        if not target_version or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", str(target_version)):
-            raise ValueError("Invalid target version.")
+        target = self._version_tuple(target_version)
+        current = self._version_tuple(self.version)
+
+        if target <= current:
+            raise ValueError("Target version must be newer than current version.")
+
+        if not isinstance(sha256, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", sha256
+        ):
+            raise ValueError("A valid SHA-256 digest is required.")
+
+        if not isinstance(apk_path, (str, os.PathLike)) or not os.fspath(
+            apk_path
+        ).strip():
+            raise ValueError("A valid APK path is required.")
+
         self.save_update_state({
             "status": "pending",
             "current_version": self.version,
             "target_version": str(target_version),
-            "apk_path": os.path.abspath(apk_path),
-            "sha256": str(sha256).lower()
+            "apk_path": os.path.abspath(os.fspath(apk_path)),
+            "sha256": sha256.lower()
         })
 
     def resolve_update_state(self, current_version=None):
         state = self.load_update_state()
+
         if state.get("status") != "pending":
             return state
-        current = self._version_tuple(current_version or self.version)
-        target = self._version_tuple(state.get("target_version", ""))
-        state["status"] = "confirmed" if current == target else "failed"
-        state["installed_version"] = str(current_version or self.version)
-        if state["status"] == "failed":
-            state["reason"] = "App resumed without the target version; installation was cancelled or unsuccessful."
+
+        installed = str(current_version or self.version)
+
+        try:
+            current = self._version_tuple(installed)
+            target = self._version_tuple(state.get("target_version", ""))
+
+            if current >= target:
+                state["status"] = "confirmed"
+            else:
+                state["status"] = "failed"
+                state["reason"] = (
+                    "App resumed without the target version; "
+                    "installation was cancelled or unsuccessful."
+                )
+
+            state["installed_version"] = installed
+
+        except (ValueError, TypeError):
+            state["status"] = "failed"
+            state["reason"] = "Pending update version data is invalid."
+            state["installed_version"] = installed
+
         self.save_update_state(state)
         return state
 
