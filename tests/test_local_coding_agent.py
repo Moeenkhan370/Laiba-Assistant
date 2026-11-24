@@ -72,5 +72,22 @@ class LocalCodingAgentTests(unittest.TestCase):
                             and x["path"] == "broken.py"
                             for x in report["findings"]))
 
+
+    def test_nested_ast_scope_and_async_mapping(self):
+        (self.root / "nested.py").write_text(
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        async def run(self):\n"
+            "            def helper(): pass\n",
+            encoding="utf-8"
+        )
+        agent = LocalCodingAgent(self.root)
+        agent.scan()
+        report = agent.analyze()
+        symbols = report["symbols"]["nested.py"]["symbols"]
+        self.assertTrue(any(x.get("parent") == "Outer" for x in symbols))
+        self.assertTrue(any(x.get("kind") == "async_function" and
+                            x.get("parent") == "Outer.Inner" for x in symbols))
+
 if __name__ == "__main__":
     unittest.main()

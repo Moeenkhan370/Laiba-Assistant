@@ -103,26 +103,47 @@ class LocalCodingAgent:
                 continue
 
             symbols, imports = [], []
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+
+            class ScopeVisitor(ast.NodeVisitor):
+                def __init__(self):
+                    self.scope = []
+
+                def _visit_definition(self, node, kind):
+                    qualified = ".".join(self.scope + [node.name])
                     symbols.append({
-                        "kind": "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function",
-                        "name": node.name, "line": node.lineno,
-                        "end_line": getattr(node, "end_lineno", node.lineno)
-                    })
-                elif isinstance(node, ast.ClassDef):
-                    symbols.append({
-                        "kind": "class", "name": node.name,
+                        "kind": kind,
+                        "name": node.name,
+                        "qualified_name": qualified,
+                        "parent": ".".join(self.scope) or None,
                         "line": node.lineno,
                         "end_line": getattr(node, "end_lineno", node.lineno)
                     })
-                elif isinstance(node, ast.Import):
+                    self.scope.append(node.name)
+                    self.generic_visit(node)
+                    self.scope.pop()
+
+                def visit_ClassDef(self, node):
+                    self._visit_definition(node, "class")
+
+                def visit_FunctionDef(self, node):
+                    self._visit_definition(node, "function")
+
+                def visit_AsyncFunctionDef(self, node):
+                    self._visit_definition(node, "async_function")
+
+                def visit_Import(self, node):
                     for alias in node.names:
                         imports.append((alias.name, node.lineno))
-                elif isinstance(node, ast.ImportFrom):
+                    self.generic_visit(node)
+
+                def visit_ImportFrom(self, node):
                     module = "." * node.level + (node.module or "")
                     imports.append((module, node.lineno))
+                    self.generic_visit(node)
 
+            visitor = ScopeVisitor()
+            visitor.visit(tree)
+            symbols.sort(key=lambda x: (x["line"], x["name"]))
             records[path] = {
                 "symbols": sorted(symbols, key=lambda x: (x["line"], x["name"])),
                 "imports": [{"module": m, "line": n} for m, n in imports]
