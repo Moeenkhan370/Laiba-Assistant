@@ -67,58 +67,118 @@ class GitHubClient:
             )
         }
 
-    def fetch_repository_files(self, max_files=2000, max_blob_bytes=100000):
-        """Read eligible text files from the configured branch; never write to GitHub."""
+
+    def fetch_repository_files(
+        self, max_files=None, max_blob_bytes=5 * 1024 * 1024
+    ):
+        """Fetch every eligible text file without silently truncating analysis."""
         branch = quote(self.branch, safe="")
         base = "/repos/" + self.repository
+
         ref = self.request(base + "/git/ref/heads/" + branch)
-        commit = self.request(base + "/git/commits/" + ref["object"]["sha"])
-        tree_sha = commit["tree"]["sha"]
-        tree = self.request(base + "/git/trees/" + tree_sha, {"recursive": "1"})
+        commit = self.request(
+            base + "/git/commits/" + ref["object"]["sha"]
+        )
+        tree = self.request(
+            base + "/git/trees/" + commit["tree"]["sha"],
+            {"recursive": "1"}
+        )
+
         if tree.get("truncated"):
-            raise RuntimeError("GitHub returned an incomplete repository tree; refusing partial analysis.")
+            raise RuntimeError(
+                "GitHub returned an incomplete repository tree."
+            )
+
         allowed = {
             ".py", ".md", ".json", ".txt", ".yaml", ".yml",
             ".toml", ".ini", ".cfg", ".kv", ".spec", ".sh",
-            ".xml", ".gradle", ".properties", ".backup"
+            ".xml", ".gradle", ".properties", ".backup", ".java"
         }
-        blocked = {".git", ".laiba_backups", "__pycache__", "venv", ".venv", "bin"}
-        secret_names = {".env", "laiba_config.json", "secrets.json", "credentials.json"}
+        blocked = {
+            ".git", ".laiba_backups", "__pycache__",
+            "venv", ".venv", "bin"
+        }
+        secret_names = {
+            ".env", "laiba_config.json", "secrets.json",
+            "credentials.json"
+        }
+
         files = {}
+        total_bytes = 0
+
         for item in tree.get("tree", []):
             if item.get("type") != "blob":
                 continue
+
             path = item.get("path", "")
             parts = path.split("/")
-            if (Path(path).suffix.lower() not in allowed
-                    or any(
-                        x in blocked or
-                        (x.startswith(".") and not (
-                            parts[0] == ".github" and
-                            len(parts) > 2 and parts[1] == "workflows"
-                        ))
-                        for x in parts[:-1]
-                    )
-                    or parts[-1].lower() in secret_names
-                    or parts[-1].lower().startswith((".env.", "secret", "credential"))
-                    or Path(parts[-1]).suffix.lower() in {
-                        ".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"
-                    }
-                    or (parts[-1].startswith(".") and not (
-                        len(parts) > 2 and parts[0] == ".github"
-                        and parts[1] == "workflows"
-                    ))
-                    or item.get("size", 0) > max_blob_bytes):
+            if not path or len(parts) == 0:
                 continue
-            blob = self.request(base + "/git/blobs/" + item["sha"])
+
+            name = parts[-1].lower()
+            workflow = (
+                len(parts) > 2
+                and parts[0] == ".github"
+                and parts[1] == "workflows"
+            )
+
+            if Path(path).suffix.lower() not in allowed:
+                continue
+
+            if any(part in blocked for part in parts[:-1]):
+                continue
+
+            if any(
+                part.startswith(".") and not workflow
+                for part in parts[:-1]
+            ):
+                continue
+
+            if name in secret_names:
+                continue
+
+            if name.startswith((".env.", "secret", "credential")):
+                continue
+
+            if Path(name).suffix.lower() in {
+                ".pem", ".key", ".p12", ".pfx",
+                ".keystore", ".jks"
+            }:
+                continue
+
+            size = int(item.get("size", 0))
+
+            if size > max_blob_bytes:
+                raise RuntimeError(
+                    "Repository file exceeds analysis limit: " + path
+                )
+
+            if total_bytes + size > 50 * 1024 * 1024:
+                raise RuntimeError(
+                    "Repository text exceeds the 50 MB safety limit."
+                )
+
+            blob = self.request(
+                base + "/git/blobs/" + item["sha"]
+            )
+
             try:
-                raw = base64.b64decode(blob.get("content", ""))
-                files[path] = raw.decode("utf-8")
+                raw = base64.b64decode(
+                    blob.get("content", "")
+                )
+                content = raw.decode("utf-8")
             except (ValueError, UnicodeDecodeError):
+                # Binary content is not source text.
                 continue
-            if len(files) >= max_files:
+
+            total_bytes += len(raw)
+            files[path] = content
+
+            if max_files is not None and len(files) >= max_files:
                 break
+
         return files
+
 
     def list_commits(self, per_page=5):
         per_page = int(per_page)
@@ -143,7 +203,7 @@ class GitHubClient:
         allowed = {
             ".py", ".md", ".json", ".txt", ".yaml", ".yml",
             ".toml", ".ini", ".cfg", ".kv", ".spec", ".sh",
-            ".xml", ".gradle", ".properties"
+            ".xml", ".gradle", ".properties", ".backup", ".java"
         }
         blocked = {".git", ".laiba_backups", "__pycache__", "venv", ".venv", "bin"}
         secrets = {".env", "laiba_config.json", "secrets.json", "credentials.json"}
@@ -172,13 +232,13 @@ class GitHubClient:
             result.append(path)
         return sorted(result)
 
-    def read_file(self, path, max_bytes=20000):
+    def read_file(self, path, max_bytes=5 * 1024 * 1024):
         path = str(path or "").strip().replace("\\\\", "/")
         parts = path.split("/")
         allowed = {
             ".py", ".md", ".json", ".txt", ".yaml", ".yml",
             ".toml", ".ini", ".cfg", ".kv", ".spec", ".sh",
-            ".xml", ".gradle", ".properties"
+            ".xml", ".gradle", ".properties", ".backup", ".java"
         }
         if (
             not path or path.startswith("/") or

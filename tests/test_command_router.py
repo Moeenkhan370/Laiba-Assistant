@@ -64,6 +64,9 @@ class NaturalIntentRouterTests(unittest.TestCase):
     def test_all_remaining_router_intents(self):
         cases = {
             "find bugs in this code": "bug_analysis",
+            "analyze entire repository": "repository_analysis",
+            "full project analysis": "repository_analysis",
+            "تمام فائلوں کا تجزیہ": "repository_analysis",
             "export zip": "zip_export",
             "show me a cube": "3d_status",
             "list files": "file_list",

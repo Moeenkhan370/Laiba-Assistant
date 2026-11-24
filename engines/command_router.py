@@ -77,6 +77,26 @@ class CommandRouter:
         )):
             return "build_status"
 
+        # Full repository analysis, distinct from ordinary bug questions.
+        if self._has(q, (
+            "full repository analysis",
+            "analyze entire repository",
+            "analyse entire repository",
+            "analyze complete repository",
+            "analyse complete repository",
+            "analyze whole project",
+            "analyse whole project",
+            "analyze entire project",
+            "repository analyzer",
+            "full project analysis",
+            "مکمل ریپو کا تجزیہ",
+            "پوری ریپوزٹری کا تجزیہ",
+            "پورے پروجیکٹ کا تجزیہ",
+            "پورا پروجیکٹ مکمل چیک",
+            "تمام فائلوں کا تجزیہ"
+        )):
+            return "repository_analysis"
+
         # Bug analysis without changing files.
         if self._has(q, (
             "bug analysis", "analyze bugs", "analyse bugs",
