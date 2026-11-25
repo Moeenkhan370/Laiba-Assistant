@@ -107,7 +107,7 @@ jobs:
           "$ZIPALIGN" -f 4 "$APK" "$RUNNER_TEMP/laiba-signing/aligned.apk"
           "$APKSIGNER" sign --ks "$RUNNER_TEMP/laiba-signing/laiba-release.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out "$RUNNER_TEMP/laiba-signing/signed.apk" "$RUNNER_TEMP/laiba-signing/aligned.apk"
           "$APKSIGNER" verify --verbose --print-certs "$RUNNER_TEMP/laiba-signing/signed.apk" | tee "$RUNNER_TEMP/laiba-signing/verification.txt"
-          ACTUAL="$(sed -n 's/.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/laiba-signing/verification.txt" | head -n1 | tr -d ':')"
+          ACTUAL="$(sed -n 's/.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/laiba-signing/verification.txt" | head -n1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="FC1F0FB67EEC5260DD113EFA87161540F9E380BCDE9FF27C216EFEA86D044FFA"
           test "$ACTUAL" = "$EXPECTED" || { echo "Signed APK certificate fingerprint mismatch"; exit 1; }
           mv "$RUNNER_TEMP/laiba-signing/signed.apk" "$APK"
