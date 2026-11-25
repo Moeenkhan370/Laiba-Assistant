@@ -16,10 +16,8 @@ DEFAULT_CONFIG = {
     "GITHUB_REPOSITORY": "Moeenkhan370/Laiba-Assistant",
     "GITHUB_BRANCH": "main",
     "GEMINI_API_KEYS": [],
-    "GEMINI_AUTO_MODEL_SWITCHING": False,
-    "GEMINI_FIXED_MODEL": "gemma-4-26b-a4b-it",
-    "GEMINI_MODEL": "gemma-4-26b-a4b-it",
-    "GEMINI_MODEL_CANDIDATES": ["gemma-4-26b-a4b-it"],
+    "GEMINI_MODEL": "",
+    "GEMINI_MODEL_CANDIDATES": [],
     "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta",
     "GEMINI_TIMEOUT": 15,
     "UPDATE_SERVER_URL": "https://github.com/Moeenkhan370/Laiba-Assistant/releases/download/laiba-development-latest/update_manifest.json",  # Configure a real JSON manifest URL before enabling update checks.
