@@ -1,4 +1,4 @@
-<queries xmlns:android="http://schemas.android.com/apk/res/android">
+<queries>
         <package android:name="com.google.android.tts" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
@@ -7,5 +7,9 @@
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
-
-<uses-permission xmlns:android="http://schemas.android.com/apk/res/android" android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <application>
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/laiba_file_paths" />
+        </provider>
+    </application>

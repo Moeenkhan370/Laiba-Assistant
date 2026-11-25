@@ -1,7 +1,6 @@
 [app]
 
 android.extra_manifest_xml = ./src/android/extra_manifest.xml
-android.extra_manifest_application_arguments = ./src/android/extra_manifest_application.xml
 android.add_src = src/android/java
 android.add_resources = src/android/res
 title = Laiba Assistant
