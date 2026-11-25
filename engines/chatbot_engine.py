@@ -218,46 +218,44 @@ class ChatbotEngine:
             return "Gemini settings could not be saved: {}".format(str(exc)[:300])
 
     def test_api_connection(self, key=None):
-        test_key = str(key or self.api_key or "").strip()
+        test_key = key or self.api_key
         if not test_key:
             return {"ok": False, "message": "Gemini API key is not configured."}
-
-        response = None
         try:
-            response = self.session.get(
-                self.api_base.rstrip("/") + "/models",
-                params={"key": test_key, "pageSize": 1},
+            if bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False)):
+                candidates = self.discover_flash_models(test_key)
+                if not candidates:
+                    return {"ok": False, "message": "No compatible Flash models found."}
+                self.model_candidates = candidates
+                return {
+                    "ok": True,
+                    "message": "Gemini connected. {} compatible Flash models discovered.".format(len(candidates))
+                }
+
+            model = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
+            url = "{}/models/{}:generateContent".format(
+                self.api_base.rstrip("/"), quote(model, safe="-")
+            )
+            response = self.session.post(
+                url,
+                params={"key": test_key},
+                json={
+                    "contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+                    "generationConfig": {"maxOutputTokens": 8, "temperature": 0}
+                },
                 timeout=self.timeout
             )
-            status = response.status_code
-
-            if response.ok:
-                return {
-                    "ok": True,
-                    "message": "Gemini API key verified. Model availability will be checked when sending a message."
-                }
-
-            detail = self._safe_error(response)
-
-            if status in (429, 500, 502, 503, 504):
-                return {
-                    "ok": True,
-                    "message": "API key retained. Gemini service temporarily unavailable (HTTP {}). This does not indicate an invalid key.".format(status)
-                }
-
-            return {
-                "ok": False,
-                "message": "Gemini API key verification failed (HTTP {}): {}".format(status, detail[:180])
-            }
-
-        except Exception as exc:
-            return {
-                "ok": False,
-                "message": "Gemini verification error: {}".format(str(exc)[:180])
-            }
-        finally:
-            if response is not None:
+            if not response.ok:
+                detail = self._safe_error(response)
+                status = response.status_code
                 response.close()
+                return {"ok": False, "message": "Gemma API test failed (HTTP {}): {}".format(status, detail[:180])}
+            response.close()
+            self.model_name = model
+            self.model_candidates = [model]
+            return {"ok": True, "message": "Gemma 4 26B A4B connection successful."}
+        except Exception as exc:
+            return {"ok": False, "message": "Gemini connection test failed: {}".format(str(exc)[:250])}
 
     @staticmethod
     def _safe_error(response):
