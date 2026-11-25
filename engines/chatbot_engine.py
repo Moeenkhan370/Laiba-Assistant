@@ -395,7 +395,7 @@ class ChatbotEngine:
         }
 
         active_key = self.api_key
-        active_model = self.model_name
+        active_model = str(CURRENT_CONFIG.get("GEMINI_IMAGE_MODEL", "gemini-3.8-flash")).strip() if image_path else self.model_name
         configured_keys = list(self.api_keys or [])
         if active_key:
             configured_keys.insert(0, active_key)
@@ -403,8 +403,14 @@ class ChatbotEngine:
             str(k).strip() for k in configured_keys if str(k).strip()
         ))
 
-        auto_switching = bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False))
-        fixed_model = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
+        auto_switching = (
+            False if image_path else
+            bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False))
+        )
+        fixed_model = (
+            str(CURRENT_CONFIG.get("GEMINI_IMAGE_MODEL", "gemini-3.8-flash")).strip() if image_path else
+            str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
+        )
         errors = []
         discovered_union = []
         switched_model = False
@@ -505,14 +511,16 @@ class ChatbotEngine:
                         self.api_keys = [api_key] + [
                             key for key in self.api_keys if key != api_key
                         ]
-                        self.model_name = model
-                        self.model_candidates = key_models
+                        if not image_path:
+                            self.model_name = model
+                            self.model_candidates = key_models
                         self._active_model_key = api_key
 
                         CURRENT_CONFIG["GEMINI_API_KEY"] = api_key
                         CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
-                        CURRENT_CONFIG["GEMINI_MODEL"] = model
-                        CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
+                        if not image_path:
+                            CURRENT_CONFIG["GEMINI_MODEL"] = model
+                            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = key_models
                         if not save_config(CURRENT_CONFIG):
                             print("[LAIBA] WARNING: Could not persist the active Gemini model.")
 
@@ -574,11 +582,17 @@ class ChatbotEngine:
                 ))
                 continue
 
-        self.model_candidates = discovered_union or self.model_candidates
+        if not image_path:
+            self.model_candidates = discovered_union or self.model_candidates
         if errors:
             print("[LAIBA] Gemini failover diagnostics:")
             for error in errors[-8:]:
                 print("[LAIBA]", self._redact_api_keys(error))
+        if image_path:
+            return (
+                "Image analysis failed: gemini-3.8-flash is unavailable. "
+                "No alternate image model was used. Please retry later."
+            )
         return (
             "لائبہ اس وقت دستیاب Gemini ماڈلز سے جواب حاصل نہیں کر سکی۔ "
             "براہِ کرم کچھ دیر بعد دوبارہ کوشش کریں۔"
@@ -937,4 +951,8 @@ class ChatbotEngine:
                 spoken_prompt, max_output_tokens=320
             )
 
-        return self._gemini(text or "Please analyze this image.", image_path)
+        return self._gemini(
+            text or "Please analyze this image.",
+            image_path,
+            include_history=not bool(image_path)
+        )
