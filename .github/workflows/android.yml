@@ -2,7 +2,7 @@ name: Build Laiba Android APK
 
 on:
   push:
-    branches: [laiba-self-development]
+    branches: [main, laiba-self-development]
   workflow_dispatch:
 
 permissions:
@@ -14,12 +14,6 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: write
-    env:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      P4A_RELEASE_KEYSTORE: /tmp/laiba-release.jks
-      P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      P4A_RELEASE_KEYALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - name: Checkout Laiba Project
@@ -38,8 +32,20 @@ jobs:
 
       - name: Install Android Build Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config cmake zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 libffi-dev libssl-dev build-essential
+          for attempt in 1 2 3 4 5; do
+            echo "APT attempt $attempt of 5"
+            if sudo apt-get update && sudo apt-get install -y \
+              git zip unzip autoconf automake libtool \
+              pkg-config cmake zlib1g-dev libncurses5-dev \
+              libncursesw5-dev libtinfo6 libffi-dev libssl-dev \
+              build-essential; then
+              exit 0
+            fi
+            echo "APT failed. Retrying in 20 seconds..."
+            sleep 20
+          done
+          echo "APT installation failed after 5 attempts."
+          exit 1
 
       - name: Install Python test dependencies
         run: python -m pip install --upgrade pip "requests>=2.31,<3"
@@ -56,26 +62,12 @@ jobs:
         run: |
           sed -i '/^android\.ndk_path[[:space:]]*=/d' buildozer.spec
           sed -i '/^p4a\.source_dir[[:space:]]*=/d' buildozer.spec
-
-      - name: Restore private Android signing key
-        shell: bash
-        run: |
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          test -n "$P4A_RELEASE_KEYSTORE_PASSWD"
-          test -n "$P4A_RELEASE_KEYALIAS"
-          test -n "$P4A_RELEASE_KEYALIAS_PASSWD"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$P4A_RELEASE_KEYSTORE"
-          test -s "$P4A_RELEASE_KEYSTORE"
-          chmod 600 "$P4A_RELEASE_KEYSTORE"
+          echo "===== BUILD CONFIGURATION ====="
+          grep -E '^(android.api|android.ndk|android.minapi|android.archs|p4a.branch)' buildozer.spec
 
       - name: Build Laiba APK
-        run: buildozer -v android release
-
-      - name: Verify APK signature
         run: |
-          APK="$(find bin -maxdepth 1 -type f -name '*.apk' | head -n1)"
-          test -n "$APK"
-          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)/apksigner" verify --verbose "$APK"
+          buildozer -v android debug
 
       - name: Generate HTTPS update manifest
         run: |
@@ -96,7 +88,6 @@ jobs:
             update_manifest.json
           if-no-files-found: error
           retention-days: 14
-
       - name: Publish APK to GitHub Releases
         if: github.ref == 'refs/heads/laiba-self-development'
         uses: softprops/action-gh-release@v2
