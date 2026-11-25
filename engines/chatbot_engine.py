@@ -26,8 +26,10 @@ class ChatbotEngine:
         self.api_key = str(CURRENT_CONFIG.get("GEMINI_API_KEY", "")).strip()
         if self.api_key and self.api_key not in self.api_keys:
             self.api_keys.insert(0, self.api_key)
-        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "")
-        self.model_candidates = CURRENT_CONFIG.get("GEMINI_MODEL_CANDIDATES", [])
+        self.auto_model_switching = bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False))
+        self.fixed_model_name = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
+        self.model_name = CURRENT_CONFIG.get("GEMINI_MODEL", "") or ("" if self.auto_model_switching else self.fixed_model_name)
+        self.model_candidates = CURRENT_CONFIG.get("GEMINI_MODEL_CANDIDATES", []) or ([] if self.auto_model_switching else [self.fixed_model_name])
         self._model_cache = {}
         self._active_model_key = self.api_key
         self.api_base = CURRENT_CONFIG.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
@@ -174,34 +176,37 @@ class ChatbotEngine:
         old_model = self.model_name
         old_candidates = self.model_candidates
         old_config = dict(CURRENT_CONFIG)
+        auto_switching = bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False))
+        fixed_model = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
 
         try:
-            candidates = self.discover_flash_models(key)
-            if not candidates:
-                return "No accessible Flash model supporting generateContent was found."
+            if auto_switching:
+                candidates = self.discover_flash_models(key)
+                if not candidates:
+                    return "No accessible Flash model supporting generateContent was found."
+                selected_model = ""
+            else:
+                candidates = [fixed_model]
+                selected_model = fixed_model
 
             self.api_key = key
             self.model_candidates = candidates
             self._model_cache[key] = list(candidates)
             self._active_model_key = key
-            self.model_name = ""
-
+            self.model_name = selected_model
             self.api_keys = list(dict.fromkeys([key] + self.api_keys))
+
             CURRENT_CONFIG["GEMINI_API_KEYS"] = self.api_keys
             CURRENT_CONFIG["GEMINI_API_KEY"] = key
-            CURRENT_CONFIG["GEMINI_MODEL"] = ""
+            CURRENT_CONFIG["GEMINI_MODEL"] = selected_model
             CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = candidates
 
             if not save_config(CURRENT_CONFIG):
-                CURRENT_CONFIG.clear()
-                CURRENT_CONFIG.update(old_config)
-                self.api_key = old_key
-                self.api_keys = list(old_config.get("GEMINI_API_KEYS", []))
-                self.model_name = old_model
-                self.model_candidates = old_candidates
-                return "Settings could not be saved. Previous settings restored."
+                raise RuntimeError("Settings could not be saved.")
 
-            return "API key saved. Automatic Flash selection enabled. Found {} compatible models.".format(len(candidates))
+            if auto_switching:
+                return "API key saved. Automatic Flash model selection is enabled."
+            return "API key saved. Fixed Gemma 4 26B A4B selected; automatic model switching is disabled."
 
         except Exception as exc:
             self.api_key = old_key
@@ -210,22 +215,47 @@ class ChatbotEngine:
             self.model_candidates = old_candidates
             CURRENT_CONFIG.clear()
             CURRENT_CONFIG.update(old_config)
-            return "Gemini model discovery failed: {}".format(str(exc)[:400])
+            return "Gemini settings could not be saved: {}".format(str(exc)[:300])
 
-    def test_api_connection(self):
-        if not self.api_key:
+    def test_api_connection(self, key=None):
+        test_key = key or self.api_key
+        if not test_key:
             return {"ok": False, "message": "Gemini API key is not configured."}
         try:
-            candidates = self.discover_flash_models()
-            if not candidates:
-                return {"ok": False, "message": "No compatible Flash models found."}
-            self.model_candidates = candidates
-            return {
-                "ok": True,
-                "message": "Gemini connected. {} compatible Flash models discovered.".format(len(candidates))
-            }
+            if bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False)):
+                candidates = self.discover_flash_models(test_key)
+                if not candidates:
+                    return {"ok": False, "message": "No compatible Flash models found."}
+                self.model_candidates = candidates
+                return {
+                    "ok": True,
+                    "message": "Gemini connected. {} compatible Flash models discovered.".format(len(candidates))
+                }
+
+            model = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
+            url = "{}/models/{}:generateContent".format(
+                self.api_base.rstrip("/"), quote(model, safe="-")
+            )
+            response = self.session.post(
+                url,
+                params={"key": test_key},
+                json={
+                    "contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+                    "generationConfig": {"maxOutputTokens": 8, "temperature": 0}
+                },
+                timeout=self.timeout
+            )
+            if not response.ok:
+                detail = self._safe_error(response)
+                status = response.status_code
+                response.close()
+                return {"ok": False, "message": "Gemma API test failed (HTTP {}): {}".format(status, detail[:180])}
+            response.close()
+            self.model_name = model
+            self.model_candidates = [model]
+            return {"ok": True, "message": "Gemma 4 26B A4B connection successful."}
         except Exception as exc:
-            return {"ok": False, "message": "Gemini discovery failed: {}".format(str(exc)[:300])}
+            return {"ok": False, "message": "Gemini connection test failed: {}".format(str(exc)[:250])}
 
     @staticmethod
     def _safe_error(response):
@@ -373,41 +403,43 @@ class ChatbotEngine:
             str(k).strip() for k in configured_keys if str(k).strip()
         ))
 
-        # Use every compatible Flash model returned by Google's live
-        # ListModels API. The discovery method already filters capabilities.
+        auto_switching = bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False))
+        fixed_model = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
         errors = []
         discovered_union = []
         switched_model = False
 
         for api_key in api_keys:
             try:
-                # Discover once per API key per app session; reuse the cache.
-                discovered = self._model_cache.get(api_key)
-                if discovered is None:
-                    discovered = self.discover_flash_models(api_key)
-                    self._model_cache[api_key] = list(discovered)
+                if auto_switching:
+                    discovered = self._model_cache.get(api_key)
+                    if discovered is None:
+                        discovered = self.discover_flash_models(api_key)
+                        self._model_cache[api_key] = list(discovered)
 
-                key_models = list(dict.fromkeys(
-                    name for name in discovered
-                    if isinstance(name, str) and "flash" in name.lower()
-                ))
+                    key_models = list(dict.fromkeys(
+                        name for name in discovered
+                        if isinstance(name, str) and "flash" in name.lower()
+                    ))
+                    for name in key_models:
+                        if name not in discovered_union:
+                            discovered_union.append(name)
 
-                for name in key_models:
-                    if name not in discovered_union:
-                        discovered_union.append(name)
+                    if not key_models:
+                        errors.append("No supported stable Flash model for an API key.")
+                        continue
 
-                if not key_models:
-                    errors.append("No supported stable Flash model for an API key.")
-                    continue
-
-                # Keep using the selected model first. Only try another model
-                # after this one actually fails.
-                if api_key == active_key and active_model in key_models:
-                    ordered_models = [active_model] + [
-                        name for name in key_models if name != active_model
-                    ]
+                    if api_key == active_key and active_model in key_models:
+                        ordered_models = [active_model] + [
+                            name for name in key_models if name != active_model
+                        ]
+                    else:
+                        ordered_models = list(key_models)
                 else:
-                    ordered_models = list(key_models)
+                    key_models = [fixed_model]
+                    if fixed_model not in discovered_union:
+                        discovered_union.append(fixed_model)
+                    ordered_models = [fixed_model]
 
                 for model in ordered_models:
                     url = "{}/models/{}:generateContent".format(
@@ -465,7 +497,7 @@ class ChatbotEngine:
                             continue
 
                         switched_model = bool(
-                            active_model and
+                            auto_switching and active_model and
                             (api_key != active_key or model != active_model)
                         )
 

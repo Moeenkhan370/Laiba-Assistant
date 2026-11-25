@@ -1438,12 +1438,9 @@ class LaibaKivyApp(App):
 
         def worker():
             try:
-                models = self.chatbot.discover_flash_models(key)
-                ok = bool(models)
-                message = (
-                    "Key is working. {} Flash models found.".format(len(models))
-                    if ok else "No compatible Flash models found."
-                )
+                result = self.chatbot.test_api_connection(key)
+                ok = bool(result.get("ok"))
+                message = result.get("message", "API key test failed.")
             except Exception as exc:
                 ok = False
                 message = "Key test failed: " + str(exc)[:180]
@@ -1471,17 +1468,19 @@ class LaibaKivyApp(App):
         old_config = dict(CURRENT_CONFIG)
 
         new_active = new_keys[0] if old_key == key else old_key
+        auto_switching = bool(CURRENT_CONFIG.get("GEMINI_AUTO_MODEL_SWITCHING", False))
+        fixed_model = str(CURRENT_CONFIG.get("GEMINI_FIXED_MODEL", "gemma-4-26b-a4b-it")).strip()
 
         try:
             self.chatbot.api_keys = new_keys
             self.chatbot.api_key = new_active
-            self.chatbot.model_name = ""
-            self.chatbot.model_candidates = []
+            self.chatbot.model_name = "" if auto_switching else fixed_model
+            self.chatbot.model_candidates = [] if auto_switching else [fixed_model]
 
             CURRENT_CONFIG["GEMINI_API_KEYS"] = new_keys
             CURRENT_CONFIG["GEMINI_API_KEY"] = new_active
-            CURRENT_CONFIG["GEMINI_MODEL"] = ""
-            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = []
+            CURRENT_CONFIG["GEMINI_MODEL"] = "" if auto_switching else fixed_model
+            CURRENT_CONFIG["GEMINI_MODEL_CANDIDATES"] = [] if auto_switching else [fixed_model]
 
             if not app_config.save_config(CURRENT_CONFIG):
                 raise RuntimeError("Configuration save failed.")
